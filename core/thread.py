@@ -2105,9 +2105,14 @@ class Thread:
                 else:
                     embed.set_footer(text=self.bot.config["anon_tag"])
         else:
-            # Add forwarded message indicator in footer for mods
+            # Add forwarded message indicator in footer for mods.
+            # Covers both multi-forward (message_snapshots) and single-forward (MessageType.forward).
             footer_text = f"Message ID: {message.id}"
-            if hasattr(message, "message_snapshots") and len(message.message_snapshots) > 0:
+            _fwd_type = getattr(discord.MessageType, "forward", None)
+            is_forwarded = (hasattr(message, "message_snapshots") and len(message.message_snapshots) > 0) or (
+                _fwd_type is not None and getattr(message, "type", None) == _fwd_type
+            )
+            if is_forwarded:
                 footer_text += " • Forwarded"
             embed.set_footer(text=footer_text)
             embed.colour = self.bot.recipient_color

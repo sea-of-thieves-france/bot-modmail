@@ -938,6 +938,35 @@ class ModmailBot(commands.Bot):
 
         # Handle forwarded messages (Discord forwards)
         # See: https://discord.com/developers/docs/resources/message#message-reference-content-attribution-forwards
+
+        class ForwardedMessage:
+            """Thin wrapper that presents a forwarded Discord message to the thread pipeline.
+
+            Both the multi-forward (message_snapshots) and the single-message forward
+            (MessageType.forward) paths produce an instance of this class so the rest of
+            the send/log machinery only has to deal with one shape.
+            """
+
+            def __init__(self, original_message, content, *, ref_message=None):
+                self.author = original_message.author
+                self.content = content
+                self.created_at = original_message.created_at
+                self.id = original_message.id
+                self.flags = original_message.flags
+                self.type = getattr(original_message, "type", None)
+                self.reference = getattr(original_message, "reference", None)
+                # Carry snapshots so display logic in thread.send() can detect forwarding
+                self.message_snapshots = getattr(original_message, "message_snapshots", [])
+                # Prefer attachments/embeds/stickers from the ref message when available
+                if ref_message is not None:
+                    self.attachments = getattr(ref_message, "attachments", [])
+                    self.stickers = getattr(ref_message, "stickers", [])
+                    self.embeds = getattr(ref_message, "embeds", [])
+                else:
+                    self.attachments = []
+                    self.stickers = []
+                    self.embeds = []
+
         # 1. Multi-forward (message_snapshots)
         if hasattr(message, "flags") and getattr(message.flags, "has_snapshot", False):
             if hasattr(message, "message_snapshots") and message.message_snapshots:
@@ -985,20 +1014,6 @@ class ModmailBot(commands.Bot):
                         return await message.channel.send(embed=embed)
                 # Extract forwarded content using utility function
                 combined_content = extract_forwarded_content(message) or "[Forwarded message with no content]"
-
-                class ForwardedMessage:
-                    def __init__(self, original_message, forwarded_content):
-                        self.author = original_message.author
-                        self.content = forwarded_content
-                        self.attachments = []
-                        self.stickers = []
-                        self.created_at = original_message.created_at
-                        self.embeds = []
-                        self.id = original_message.id
-                        self.flags = original_message.flags
-                        self.message_snapshots = original_message.message_snapshots
-                        self.type = getattr(original_message, "type", None)
-
                 forwarded_msg = ForwardedMessage(message, combined_content)
                 await thread.send(forwarded_msg)
                 await self.add_reaction(message, sent_emoji)
@@ -1070,26 +1085,14 @@ class ModmailBot(commands.Bot):
                             await self.add_reaction(message, blocked_emoji)
                             return await message.channel.send(embed=embed)
 
-                    # Create a forwarded message wrapper to preserve forward info
-                    class ForwardedMessage:
-                        def __init__(self, original_message, ref_message):
-                            self.author = original_message.author
-                            # Use the utility function to extract content or fallback to ref message content
-                            extracted_content = extract_forwarded_content(original_message)
-                            self.content = (
-                                extracted_content
-                                or ref_message.content
-                                or "[Forwarded message with no text content]"
-                            )
-                            self.attachments = getattr(ref_message, "attachments", [])
-                            self.stickers = getattr(ref_message, "stickers", [])
-                            self.created_at = original_message.created_at
-                            self.embeds = getattr(ref_message, "embeds", [])
-                            self.id = original_message.id
-                            self.type = getattr(original_message, "type", None)
-                            self.reference = original_message.reference
-
-                    forwarded_msg = ForwardedMessage(message, ref_msg)
+                    # Use the utility function for content; fall back to the ref message's own text
+                    extracted_content = extract_forwarded_content(message)
+                    fwd_content = (
+                        extracted_content
+                        or getattr(ref_msg, "content", None)
+                        or "[Forwarded message with no text content]"
+                    )
+                    forwarded_msg = ForwardedMessage(message, fwd_content, ref_message=ref_msg)
                     await thread.send(forwarded_msg)
                     await self.add_reaction(message, sent_emoji)
                     self.dispatch("thread_reply", thread, False, message, False, False)
