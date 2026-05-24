@@ -277,3 +277,28 @@ class S3StorageClient:
         except Exception as exc:
             logger.warning("Error uploading avatar to S3 (key=%r): %s", key, exc)
             return None
+
+    async def upload_bytes(
+        self, key: str, data: bytes, content_type: str
+    ) -> Optional[str]:
+        """
+        Upload raw bytes to S3 under an explicit key.
+
+        Intended for data already in memory (e.g. lottie stickers converted to PNG).
+        Idempotent: if the key already exists the existing URL is returned.
+
+        Returns the public S3 URL or ``None`` on failure.
+        """
+        if not self.enabled or self._client is None:
+            return None
+
+        if await self._object_exists(key):
+            return self._url_for(key)
+
+        try:
+            url = await self._put(key, data, content_type)
+            logger.debug("Uploaded bytes → %s", url)
+            return url
+        except Exception as exc:
+            logger.warning("Error uploading bytes to S3 (key=%r): %s", key, exc)
+            return None

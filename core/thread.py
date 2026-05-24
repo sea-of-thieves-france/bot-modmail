@@ -1942,7 +1942,19 @@ class Thread:
             )
             embed.color = 0x5865F2  # Discord blurple for system messages
 
-        ext = [(a.url, a.filename, False) for a in message.attachments]
+        # Upload each attachment to S3 so the embed URL is permanent.
+        # Falls back to the (potentially expiring) Discord CDN URL if S3 is
+        # disabled or the upload fails.  upload_attachment() is idempotent, so
+        # the subsequent append_log() call skips the re-upload.
+        _storage = getattr(self.bot, "storage", None)
+        ext = []
+        for _a in message.attachments:
+            if _storage and _storage.enabled:
+                _s3 = await _storage.upload_attachment(_a)
+                _url = _s3 if _s3 is not None else _a.url
+            else:
+                _url = _a.url
+            ext.append((_url, _a.filename, False))
 
         images = []
         attachments = []
@@ -2002,14 +2014,22 @@ class Thread:
                     )
                     b64_data = base64.b64encode(img_data).decode()
 
-                    # upload to imgur
-                    async with self.bot.session.post(
-                        "https://api.imgur.com/3/image",
-                        headers={"Authorization": "Client-ID 50e96145ac5e085"},
-                        data={"image": b64_data},
-                    ) as resp:
-                        result = await resp.json()
-                        url = result["data"]["link"]
+                    # Upload the PNG to S3 when available; fall back to Imgur.
+                    _sticker_storage = getattr(self.bot, "storage", None)
+                    url = None
+                    if _sticker_storage and _sticker_storage.enabled:
+                        url = await _sticker_storage.upload_bytes(
+                            f"stickers/{i.id}.png", img_data, "image/png"
+                        )
+                    if url is None:
+                        # Imgur fallback (S3 disabled or upload failed)
+                        async with self.bot.session.post(
+                            "https://api.imgur.com/3/image",
+                            headers={"Authorization": "Client-ID 50e96145ac5e085"},
+                            data={"image": b64_data},
+                        ) as resp:
+                            result = await resp.json()
+                            url = result["data"]["link"]
 
                 except Exception:
                     traceback.print_exc()
