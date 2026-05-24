@@ -605,6 +605,23 @@ class MongoDBClient(ApiClient):
     async def create_log_entry(self, recipient: Member, channel: TextChannel, creator: Member) -> str:
         key = secrets.token_hex(6)
 
+        # Upload recipient / creator avatars to S3 when storage is enabled.
+        storage = getattr(self.bot, "storage", None)
+        if storage and storage.enabled:
+            recipient_avatar_url = (
+                await storage.upload_avatar(recipient.id, recipient.display_avatar)
+                if recipient.display_avatar
+                else None
+            )
+            creator_avatar_url = (
+                await storage.upload_avatar(creator.id, creator.display_avatar)
+                if creator.display_avatar
+                else None
+            )
+        else:
+            recipient_avatar_url = recipient.display_avatar.url if recipient.display_avatar else None
+            creator_avatar_url = creator.display_avatar.url if creator.display_avatar else None
+
         await self.tickets.insert_one(
             {
                 "_id": key,
@@ -619,14 +636,14 @@ class MongoDBClient(ApiClient):
                     "id": str(recipient.id),
                     "name": recipient.name,
                     "discriminator": recipient.discriminator,
-                    "avatar_url": recipient.display_avatar.url if recipient.display_avatar else None,
+                    "avatar_url": recipient_avatar_url,
                     "mod": False,
                 },
                 "creator": {
                     "id": str(creator.id),
                     "name": creator.name,
                     "discriminator": creator.discriminator,
-                    "avatar_url": creator.display_avatar.url if creator.display_avatar else None,
+                    "avatar_url": creator_avatar_url,
                     "mod": isinstance(creator, Member),
                 },
                 "closer": None,
@@ -694,6 +711,31 @@ class MongoDBClient(ApiClient):
         else:
             stored_content = message.content
 
+        # Resolve avatar and attachment URLs — upload to S3 when available.
+        storage = getattr(self.bot, "storage", None)
+
+        if storage and storage.enabled and message.author.display_avatar:
+            author_avatar_url = await storage.upload_avatar(
+                message.author.id, message.author.display_avatar
+            )
+        else:
+            author_avatar_url = (
+                message.author.display_avatar.url if message.author.display_avatar else None
+            )
+
+        attachments = []
+        for a in message.attachments:
+            s3_url = await storage.upload_attachment(a) if storage and storage.enabled else None
+            attachments.append(
+                {
+                    "id": a.id,
+                    "filename": a.filename,
+                    "is_image": a.width is not None,
+                    "size": a.size,
+                    "url": s3_url,  # None when S3 disabled or upload failed (fail-silently)
+                }
+            )
+
         data = {
             "timestamp": str(message.created_at),
             "message_id": message_id,
@@ -701,21 +743,12 @@ class MongoDBClient(ApiClient):
                 "id": str(message.author.id),
                 "name": message.author.name,
                 "discriminator": message.author.discriminator,
-                "avatar_url": message.author.display_avatar.url if message.author.display_avatar else None,
+                "avatar_url": author_avatar_url,
                 "mod": not isinstance(message.channel, DMChannel),
             },
             "content": stored_content,
             "type": type_,
-            "attachments": [
-                {
-                    "id": a.id,
-                    "filename": a.filename,
-                    "is_image": a.width is not None,
-                    "size": a.size,
-                    "url": a.url,
-                }
-                for a in message.attachments
-            ],
+            "attachments": attachments,
         }
 
         # Mark forwarded messages so log viewers can distinguish them.
@@ -754,6 +787,16 @@ class MongoDBClient(ApiClient):
         ).to_list(limit)
 
     async def create_note(self, recipient: Member, message: Message, message_id: Union[int, str]):
+        storage = getattr(self.bot, "storage", None)
+        if storage and storage.enabled and message.author.display_avatar:
+            note_avatar_url = await storage.upload_avatar(
+                message.author.id, message.author.display_avatar
+            )
+        else:
+            note_avatar_url = (
+                message.author.display_avatar.url if message.author.display_avatar else None
+            )
+
         await self.db.notes.insert_one(
             {
                 "recipient": str(recipient.id),
@@ -761,9 +804,7 @@ class MongoDBClient(ApiClient):
                     "id": str(message.author.id),
                     "name": message.author.name,
                     "discriminator": message.author.discriminator,
-                    "avatar_url": (
-                        message.author.display_avatar.url if message.author.display_avatar else None
-                    ),
+                    "avatar_url": note_avatar_url,
                 },
                 "message": message.content,
                 "message_id": str(message_id),

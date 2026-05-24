@@ -45,6 +45,7 @@ from core.models import (
     configure_logging,
     getLogger,
 )
+from core.storage import S3StorageClient
 from core.thread import ThreadManager
 from core.time import human_timedelta
 from core.utils import (
@@ -81,6 +82,7 @@ class ModmailBot(commands.Bot):
 
         super().__init__(command_prefix=None, intents=intents)  # implemented in `get_prefix`
         self.session = None
+        self.storage = None
         self._api = None
         self.formatter = SafeFormatter()
         self.loaded_cogs = [
@@ -227,6 +229,8 @@ class ModmailBot(commands.Bot):
             async with self:
                 self._connected = asyncio.Event()
                 self.session = ClientSession(loop=self.loop)
+                self.storage = S3StorageClient(self)
+                await self.storage.setup()
 
                 if self.config["enable_presence_intent"]:
                     logger.info("Starting bot with presence intent.")
@@ -244,6 +248,8 @@ class ModmailBot(commands.Bot):
                 except Exception:
                     logger.critical("Fatal exception", exc_info=True)
                 finally:
+                    if self.storage:
+                        await self.storage.close()
                     if self.session:
                         await self.session.close()
                     if not self.is_closed():
