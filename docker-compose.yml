@@ -10,6 +10,8 @@ services:
       - CONNECTION_URI=mongodb://mongo
     depends_on:
       - mongo
+      - garage
+
   logviewer:
     image: ghcr.io/modmail-dev/logviewer:master
     restart: always
@@ -19,11 +21,27 @@ services:
       - MONGO_URI=mongodb://mongo
     ports:
       - 80:8000
+
   mongo:
     image: mongo
     restart: always
     volumes:
       - mongodb:/data/db
 
+  garage:
+    image: dxflrs/garage:v2.3.0
+    volumes:
+      - garage_data:/var/lib/garage/data
+      - garage_meta:/var/lib/garage/meta
+      - ./docker/garage.toml:/etc/garage.toml
+    ports:
+      - "9100:9000"   # S3 API (authenticated) — bot uploads + bucket management
+      - "9200:3902"   # Web endpoint (anonymous read) — log viewer / browsers
+      - "3903:3903"   # Admin API
+    command: [ "./garage", "-c", "/etc/garage.toml", "server" ]
+    restart: unless-stopped
+
 volumes:
   mongodb:
+  garage_data:
+  garage_meta:
