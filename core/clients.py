@@ -681,6 +681,19 @@ class MongoDBClient(ApiClient):
         channel_id = str(channel_id) or str(message.channel.id)
         message_id = str(message_id) or str(message.id)
 
+        # For forwarded messages, Discord always sets message.content = '' — the real text
+        # lives in message_snapshots[0].content.  Extract it so the DB stores the actual content.
+        snapshots = getattr(message, "message_snapshots", None)
+        _forward_type = getattr(discord.MessageType, "forward", None)
+        is_forwarded = bool(snapshots) or (
+            _forward_type is not None and getattr(message, "type", None) == _forward_type
+        )
+        if snapshots:
+            snap = snapshots[0]
+            stored_content = getattr(snap, "content", "") or message.content or ""
+        else:
+            stored_content = message.content
+
         data = {
             "timestamp": str(message.created_at),
             "message_id": message_id,
@@ -691,7 +704,7 @@ class MongoDBClient(ApiClient):
                 "avatar_url": message.author.display_avatar.url if message.author.display_avatar else None,
                 "mod": not isinstance(message.channel, DMChannel),
             },
-            "content": message.content,
+            "content": stored_content,
             "type": type_,
             "attachments": [
                 {
@@ -706,10 +719,7 @@ class MongoDBClient(ApiClient):
         }
 
         # Mark forwarded messages so log viewers can distinguish them.
-        _forward_type = getattr(discord.MessageType, "forward", None)
-        if getattr(message, "message_snapshots", None) or (
-            _forward_type is not None and getattr(message, "type", None) == _forward_type
-        ):
+        if is_forwarded:
             data["is_forwarded"] = True
 
         return await self.tickets.find_one_and_update(

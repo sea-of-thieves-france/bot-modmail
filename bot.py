@@ -955,6 +955,7 @@ class ModmailBot(commands.Bot):
                 self.flags = original_message.flags
                 self.type = getattr(original_message, "type", None)
                 self.reference = getattr(original_message, "reference", None)
+                self.channel = original_message.channel
                 # Carry snapshots so display logic in thread.send() can detect forwarding
                 self.message_snapshots = getattr(original_message, "message_snapshots", [])
                 # Prefer attachments/embeds/stickers from the ref message when available
