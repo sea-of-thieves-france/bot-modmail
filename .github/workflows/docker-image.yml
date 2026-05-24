@@ -1,13 +1,9 @@
-
 name: Create and publish a Docker image
 
 on:
-  push:
-    branches: ['master']
-
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  workflow_dispatch:
+  release:
+    types: [published]
 
 jobs:
   build-and-push-image:
@@ -18,25 +14,19 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
 
-      - name: Log in to the Container registry
-        uses: docker/login-action@v2
+      - name: Log in to the Registry
+        uses: docker/login-action@v4
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@v4
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          registry: ${{ secrets.REGISTRY_URL }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v3
+        uses: docker/build-push-action@v7
+        timeout-minutes: 10
         with:
-          context: .
+          platforms: linux/amd64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ secrets.REGISTRY_URL }}/${{ github.repository }}:latest,${{ secrets.REGISTRY_URL }}/${{ github.repository }}:${{ github.ref_name }}

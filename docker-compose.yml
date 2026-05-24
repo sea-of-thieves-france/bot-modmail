@@ -1,7 +1,8 @@
-version: "3.7"
 services:
   bot:
-    image: ghcr.io/modmail-dev/modmail:master
+    build:
+      context: .
+      dockerfile: Dockerfile
     restart: always
     env_file:
       - .env
