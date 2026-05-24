@@ -346,8 +346,8 @@ class ApiClient:
                 return await resp.text()
 
     @property
-    def logs(self):
-        return self.db.logs
+    def tickets(self):
+        return self.db.tickets
 
     async def setup_indexes(self):
         return NotImplemented
@@ -463,7 +463,7 @@ class MongoDBClient(ApiClient):
 
     async def setup_indexes(self):
         """Setup text indexes so we can use the $search operator"""
-        coll = self.db.logs
+        coll = self.db.tickets
         index_name = "messages.content_text_messages.author.name_text_key_text"
 
         index_info = await coll.index_information()
@@ -475,7 +475,7 @@ class MongoDBClient(ApiClient):
             await coll.drop_index(old_index)
 
         if index_name not in index_info:
-            logger.info('Creating "text" index for logs collection.')
+            logger.info('Creating "text" index for tickets collection.')
             logger.info("Name: %s", index_name)
             await coll.create_index(
                 [
@@ -529,6 +529,23 @@ class MongoDBClient(ApiClient):
             raise
         else:
             logger.debug("Successfully connected to the database.")
+            # Safety check: if the old 'logs' collection still exists but 'tickets' does not,
+            # the migration script has not been run yet — abort early with a clear message.
+            try:
+                colls = await self.db.list_collection_names()
+                if "logs" in colls and "tickets" not in colls:
+                    logger.critical(
+                        "Found old 'logs' collection but no 'tickets' collection. "
+                        "Run 'python scripts/migrate_logs_to_tickets.py' before starting the bot "
+                        "with this version, then restart."
+                    )
+                    raise RuntimeError(
+                        "Database migration required: run python scripts/migrate_logs_to_tickets.py"
+                    )
+            except RuntimeError:
+                raise
+            except Exception as exc:
+                logger.warning("Could not check collection names during startup: %s", exc)
         logger.line("debug")
 
     async def get_user_logs(self, user_id: Union[str, int]) -> list:
@@ -536,14 +553,14 @@ class MongoDBClient(ApiClient):
         projection = {"messages": {"$slice": 5}}
         logger.debug("Retrieving user %s logs.", user_id)
 
-        return await self.logs.find(query, projection).to_list(None)
+        return await self.tickets.find(query, projection).to_list(None)
 
     async def find_log_entry(self, key: str) -> list:
         query = {"key": key}
         projection = {"messages": {"$slice": 5}}
         logger.debug(f"Retrieving log ID {key}.")
 
-        return await self.logs.find(query, projection).to_list(None)
+        return await self.tickets.find(query, projection).to_list(None)
 
     async def get_latest_user_logs(self, user_id: Union[str, int]):
         query = {
@@ -554,7 +571,7 @@ class MongoDBClient(ApiClient):
         projection = {"messages": {"$slice": 5}}
         logger.debug("Retrieving user %s latest logs.", user_id)
 
-        return await self.logs.find_one(query, projection, limit=1, sort=[("closed_at", -1)])
+        return await self.tickets.find_one(query, projection, limit=1, sort=[("closed_at", -1)])
 
     async def get_responded_logs(self, user_id: Union[str, int]) -> list:
         query = {
@@ -567,15 +584,15 @@ class MongoDBClient(ApiClient):
                 }
             },
         }
-        return await self.logs.find(query).to_list(None)
+        return await self.tickets.find(query).to_list(None)
 
     async def get_open_logs(self) -> list:
         query = {"open": True}
-        return await self.logs.find(query).to_list(None)
+        return await self.tickets.find(query).to_list(None)
 
     async def get_log(self, channel_id: Union[str, int]) -> dict:
         logger.debug("Retrieving channel %s logs.", channel_id)
-        return await self.logs.find_one({"channel_id": str(channel_id)})
+        return await self.tickets.find_one({"channel_id": str(channel_id)})
 
     async def get_log_link(self, channel_id: Union[str, int]) -> str:
         doc = await self.get_log(channel_id)
@@ -588,7 +605,7 @@ class MongoDBClient(ApiClient):
     async def create_log_entry(self, recipient: Member, channel: TextChannel, creator: Member) -> str:
         key = secrets.token_hex(6)
 
-        await self.logs.insert_one(
+        await self.tickets.insert_one(
             {
                 "_id": key,
                 "key": key,
@@ -623,7 +640,7 @@ class MongoDBClient(ApiClient):
         return f"{self.bot.config['log_url'].strip('/')}{'/' + prefix if prefix else ''}/{key}"
 
     async def delete_log_entry(self, key: str) -> bool:
-        result = await self.logs.delete_one({"key": key})
+        result = await self.tickets.delete_one({"key": key})
         return result.deleted_count == 1
 
     async def get_config(self) -> dict:
@@ -648,7 +665,7 @@ class MongoDBClient(ApiClient):
             return await self.db.config.update_one({"bot_id": self.bot.user.id}, {"$unset": unset})
 
     async def edit_message(self, message_id: Union[int, str], new_content: str) -> None:
-        await self.logs.update_one(
+        await self.tickets.update_one(
             {"messages.message_id": str(message_id)},
             {"$set": {"messages.$.content": new_content, "messages.$.edited": True}},
         )
@@ -688,19 +705,26 @@ class MongoDBClient(ApiClient):
             ],
         }
 
-        return await self.logs.find_one_and_update(
+        # Mark forwarded messages so log viewers can distinguish them.
+        _forward_type = getattr(discord.MessageType, "forward", None)
+        if getattr(message, "message_snapshots", None) or (
+            _forward_type is not None and getattr(message, "type", None) == _forward_type
+        ):
+            data["is_forwarded"] = True
+
+        return await self.tickets.find_one_and_update(
             {"channel_id": channel_id},
             {"$push": {"messages": data}},
             return_document=True,
         )
 
     async def post_log(self, channel_id: Union[int, str], data: dict) -> dict:
-        return await self.logs.find_one_and_update(
+        return await self.tickets.find_one_and_update(
             {"channel_id": str(channel_id)}, {"$set": data}, return_document=True
         )
 
     async def search_closed_by(self, user_id: Union[int, str]):
-        return await self.logs.find(
+        return await self.tickets.find(
             {
                 "guild_id": str(self.bot.guild_id),
                 "open": False,
@@ -710,7 +734,7 @@ class MongoDBClient(ApiClient):
         ).to_list(None)
 
     async def search_by_text(self, text: str, limit: Optional[int]):
-        return await self.bot.db.logs.find(
+        return await self.bot.db.tickets.find(
             {
                 "guild_id": str(self.bot.guild_id),
                 "open": False,

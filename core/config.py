@@ -200,7 +200,7 @@ class ConfigManager:
         "modmail_guild_id": None,
         "guild_id": None,
         "log_url": "https://example.com/",
-        "log_url_prefix": "/logs",
+        "log_url_prefix": "/tickets",
         "mongo_uri": None,
         "database_type": "mongodb",
         "connection_uri": None,  # replace mongo uri in the future

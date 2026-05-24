@@ -41,7 +41,7 @@ class Modmail(commands.Cog):
             try:
                 # Query DB every 2 minutes
                 if (now.timestamp() - last_db_query) > 120:
-                    snoozed_threads = await self.bot.api.logs.find(
+                    snoozed_threads = await self.bot.api.tickets.find(
                         {"snooze_until": {"$gte": now.isoformat()}}
                     ).to_list(None)
                     self._snoozed_cache = snoozed_threads or []
@@ -2561,7 +2561,7 @@ class Modmail(commands.Cog):
         # Store snooze_until timestamp for reliable auto-unsnooze
         now = datetime.now(timezone.utc)
         snooze_until = now + timedelta(seconds=snooze_for)
-        await self.bot.api.logs.update_one(
+        await self.bot.api.tickets.update_one(
             {"recipient.id": str(thread.id)},
             {
                 "$set": {
@@ -2630,7 +2630,7 @@ class Modmail(commands.Cog):
 
         # Manually fetch snooze_data if the thread object doesn't have it
         if not thread.snooze_data:
-            log_entry = await self.bot.api.logs.find_one({"recipient.id": str(thread.id), "snoozed": True})
+            log_entry = await self.bot.api.tickets.find_one({"recipient.id": str(thread.id), "snoozed": True})
             if log_entry:
                 thread.snooze_data = log_entry.get("snooze_data")
 
@@ -2699,7 +2699,7 @@ class Modmail(commands.Cog):
     @tasks.loop(seconds=10)
     async def snooze_auto_unsnooze(self):
         now = datetime.now(timezone.utc)
-        snoozed = await self.bot.api.logs.find({"snoozed": True}).to_list(None)
+        snoozed = await self.bot.api.tickets.find({"snoozed": True}).to_list(None)
         for entry in snoozed:
             snooze_until = entry.get("snooze_until")
             if snooze_until:
@@ -2736,7 +2736,7 @@ class Modmail(commands.Cog):
         List all snoozed threads and ask for confirmation before clearing (unsnoozing) all of them.
         Only proceed if the user confirms.
         """
-        snoozed = await self.bot.api.logs.find({"snoozed": True}).to_list(None)
+        snoozed = await self.bot.api.tickets.find({"snoozed": True}).to_list(None)
         if not snoozed:
             await ctx.send("No threads are currently snoozed.")
             return

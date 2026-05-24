@@ -1519,7 +1519,7 @@ class ModmailBot(commands.Bot):
                 if thread.snoozed and behavior == "move":
                     if not thread.snooze_data:
                         try:
-                            log_entry = await self.api.logs.find_one(
+                            log_entry = await self.api.tickets.find_one(
                                 {"recipient.id": str(thread.id), "snoozed": True}
                             )
                             if log_entry:
@@ -2170,7 +2170,7 @@ class ModmailBot(commands.Bot):
         expiration_datetime = now - log_expire_after
         # WARNING: comparison is done lexicographically, not by date.
         # This is fine as long as the date is in zero-padded ISO format, which it should be.
-        expired_logs = await self.db.logs.delete_many({"closed_at": {"$lte": str(expiration_datetime)}})
+        expired_logs = await self.db.tickets.delete_many({"closed_at": {"$lte": str(expiration_datetime)}})
 
         logger.info(f"Deleted {expired_logs.deleted_count} expired logs.")
 

@@ -246,12 +246,12 @@ class Thread:
         }
         self.snoozed = True
         # Save to DB (robust: try recipient.id, then channel_id)
-        result = await self.bot.api.logs.update_one(
+        result = await self.bot.api.tickets.update_one(
             {"recipient.id": str(self.id)},
             {"$set": {"snoozed": True, "snooze_data": self.snooze_data}},
         )
         if result.modified_count == 0 and self.channel:
-            result = await self.bot.api.logs.update_one(
+            result = await self.bot.api.tickets.update_one(
                 {"channel_id": str(self.channel.id)},
                 {"$set": {"snoozed": True, "snooze_data": self.snooze_data}},
             )
@@ -703,17 +703,17 @@ class Thread:
         self.snooze_data = None
         # Update channel_id in DB and clear snooze_data (robust: try log_key first)
         if self.log_key:
-            result = await self.bot.api.logs.update_one(
+            result = await self.bot.api.tickets.update_one(
                 {"key": self.log_key},
                 {"$set": {"channel_id": str(channel.id)}, "$unset": {"snoozed": "", "snooze_data": ""}},
             )
         else:
-            result = await self.bot.api.logs.update_one(
+            result = await self.bot.api.tickets.update_one(
                 {"recipient.id": str(self.id)},
                 {"$set": {"channel_id": str(channel.id)}, "$unset": {"snoozed": "", "snooze_data": ""}},
             )
             if result.modified_count == 0:
-                result = await self.bot.api.logs.update_one(
+                result = await self.bot.api.tickets.update_one(
                     {"channel_id": str(channel.id)},
                     {
                         "$set": {"channel_id": str(channel.id)},
@@ -1620,7 +1620,7 @@ class Thread:
             # Ensure we have snooze_data to restore location
             if not self.snooze_data:
                 try:
-                    log_entry = await self.bot.api.logs.find_one(
+                    log_entry = await self.bot.api.tickets.find_one(
                         {"recipient.id": str(self.id), "snoozed": True}
                     )
                     if log_entry:
