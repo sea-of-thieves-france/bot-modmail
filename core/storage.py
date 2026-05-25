@@ -11,20 +11,34 @@ Configuration via environment variables (.env):
     S3_SECRET_KEY – secret access key
     S3_BUCKET     – target bucket name (default: "modmail")
     S3_REGION     – region string (default: "garage")
-    S3_PUBLIC_URL – publicly reachable base URL for generated links
-                    (defaults to S3_ENDPOINT; override when the bot's
-                    internal Docker address differs from what browsers use,
-                    e.g. "http://your-server:9100")
+    S3_PUBLIC_URL – publicly reachable base URL for generated links.
+                    Must point to the Garage *web* endpoint and include the
+                    bucket as subdomain (virtual-host routing).
+                    e.g. "http://modmail.cdn.yourdomain.com"
+                    or   "http://modmail.localhost:9200" for local dev.
+                    Defaults to S3_ENDPOINT if unset (generates a warning).
 
 The feature is entirely optional.  If any of S3_ENDPOINT / S3_ACCESS_KEY /
 S3_SECRET_KEY is missing, ``S3StorageClient.enabled`` is ``False`` and all
 upload methods immediately return ``None`` — existing code paths are
 unaffected.
+
+Security notes:
+    - Attachment keys use a random UUID prefix (``attachments/{uuid}/{filename}``)
+      providing 122 bits of entropy — enumeration is computationally infeasible.
+    - Avatar keys use the Discord avatar hash (``avatars/{user_id}/{hash}.ext``)
+      which is already opaque; uploads are idempotent via a HEAD check.
+    - Neither key type contains predictable Snowflake IDs.
+    - Both ``upload_attachment()`` and ``upload_avatar()`` return a
+      ``(key, public_url)`` tuple so callers can persist both values:
+      - ``url``     → web-endpoint URL used in Discord embeds (permanent, public)
+      - ``key``  → raw key used by the API to generate presigned URLs (24h TTL)
 """
 
 import logging
 import os
-from typing import Optional
+import uuid as _uuid
+from typing import Optional, Tuple
 
 import discord
 
@@ -55,9 +69,10 @@ class S3StorageClient:
         # Garage uses virtual-host routing on its web endpoint, so the bucket name
         # must be the subdomain — the path only contains the object key.
         #
-        # Format:  http://<bucket>.<root_domain>:<web_port>
-        # Example: http://modmail.localhost:9200
-        #          → Garage serves bucket "modmail", root_domain ".localhost"
+        # Format:  http://<bucket>.<root_domain>[:<web_port>]
+        # Examples:
+        #   Local dev:   http://modmail.localhost:9200
+        #   Production:  http://modmail.cdn.yourdomain.com  (via reverse proxy)
         #
         # This must point to the Garage *web* endpoint (port 3902 / host 9200),
         # NOT the S3 API endpoint (port 9000 / host 9100) — the S3 API always
@@ -159,7 +174,7 @@ class S3StorageClient:
 
     async def _put(self, key: str, data: bytes, content_type: str) -> str:
         """
-        PUT an object with public-read ACL.
+        PUT an object into the bucket.
 
         Raises on failure — callers are expected to catch and return None.
         Returns the public URL on success.
@@ -169,7 +184,6 @@ class S3StorageClient:
             Key=key,
             Body=data,
             ContentType=content_type,
-            ACL="public-read",
         )
         return self._url_for(key)
 
@@ -177,24 +191,25 @@ class S3StorageClient:
     # Public API
     # -------------------------------------------------------------------------
 
-    async def upload_attachment(self, attachment: discord.Attachment) -> Optional[str]:
+    async def upload_attachment(self, attachment: discord.Attachment) -> Optional[Tuple[str, str]]:
         """
-        Download a Discord attachment and store it in S3.
+        Download a Discord attachment and store it in S3 with an unguessable UUID key.
 
-        Object key: ``attachments/{attachment_id}/{filename}``
+        Object key: ``attachments/{uuid4_hex}/{filename}``
 
-        - Idempotent: if the key already exists, returns the existing URL.
+        - UUID key provides 122 bits of entropy — enumeration is infeasible.
+        - Not idempotent by design: each call generates a new UUID key.
+          (Same attachment sent twice → two separate objects; acceptable trade-off.)
         - Fail-silent: returns ``None`` on any download or upload error.
 
-        Returns the public S3 URL or ``None``.
+        Returns ``(key, public_url)`` or ``None``.
+        Callers should persist both: ``url`` for Discord embeds, ``key`` for
+        API presigned URL generation.
         """
         if not self.enabled or self._client is None:
             return None
 
-        key = f"attachments/{attachment.id}/{attachment.filename}"
-
-        if await self._object_exists(key):
-            return self._url_for(key)
+        key = f"attachments/{_uuid.uuid4().hex}/{attachment.filename}"
 
         # Download from Discord CDN
         try:
@@ -216,22 +231,25 @@ class S3StorageClient:
         try:
             url = await self._put(key, data, content_type)
             logger.debug("Uploaded attachment → %s", url)
-            return url
+            return (key, url)
         except Exception as exc:
             logger.warning("Error uploading attachment to S3 (key=%r): %s", key, exc)
             return None
 
-    async def upload_avatar(self, user_id: int, avatar: discord.Asset) -> Optional[str]:
+    async def upload_avatar(self, user_id: int, avatar: discord.Asset) -> Optional[Tuple[str, str]]:
         """
         Upload a Discord user avatar to S3, skipping if the hash is already stored.
 
         Object key: ``avatars/{user_id}/{hash}.{ext}``
         Animated avatars (hash starts with ``a_``) → GIF; others → WebP.
 
-        - Idempotent: returns existing URL if the avatar hash was already uploaded.
+        - Idempotent: returns existing ``(key, url)`` if the avatar hash was already uploaded.
         - Fail-silent: returns ``None`` on any error.
 
-        Returns the public S3 URL or ``None``.
+        Returns ``(key, public_url)`` or ``None``.
+        Callers should persist both: ``avatar_url`` (kept as Discord CDN URL for Discord
+        embeds) and ``avatar_key`` (used by the API to generate presigned URLs for the
+        dashboard/logviewer).
         """
         if not self.enabled or self._client is None:
             return None
@@ -241,7 +259,7 @@ class S3StorageClient:
         key = f"avatars/{user_id}/{hash_}.{ext}"
 
         if await self._object_exists(key):
-            return self._url_for(key)
+            return (key, self._url_for(key))
 
         # Resolve the download URL (force a consistent format + size)
         try:
@@ -273,7 +291,7 @@ class S3StorageClient:
         try:
             url = await self._put(key, data, content_type)
             logger.debug("Uploaded avatar → %s", url)
-            return url
+            return (key, url)
         except Exception as exc:
             logger.warning("Error uploading avatar to S3 (key=%r): %s", key, exc)
             return None
@@ -288,6 +306,7 @@ class S3StorageClient:
         Idempotent: if the key already exists the existing URL is returned.
 
         Returns the public S3 URL or ``None`` on failure.
+        (Sticker keys are deterministic and not sensitive, so no UUID needed here.)
         """
         if not self.enabled or self._client is None:
             return None

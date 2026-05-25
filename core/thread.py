@@ -1950,8 +1950,9 @@ class Thread:
         ext = []
         for _a in message.attachments:
             if _storage and _storage.enabled:
-                _s3 = await _storage.upload_attachment(_a)
-                _url = _s3 if _s3 is not None else _a.url
+                # upload_attachment() returns (key, public_url) or None
+                _result = await _storage.upload_attachment(_a)
+                _url = _result[1] if _result is not None else _a.url
             else:
                 _url = _a.url
             ext.append((_url, _a.filename, False))
