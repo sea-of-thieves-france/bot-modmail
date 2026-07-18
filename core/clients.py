@@ -376,7 +376,9 @@ class ApiClient:
     async def get_log_link(self, channel_id: Union[str, int]) -> str:
         return NotImplemented
 
-    async def create_log_entry(self, recipient: Member, channel: TextChannel, creator: Member) -> str:
+    async def create_log_entry(
+        self, recipient: Member, channel: TextChannel, creator: Member, key: str = None
+    ) -> str:
         return NotImplemented
 
     async def delete_log_entry(self, key: str) -> bool:
@@ -602,8 +604,10 @@ class MongoDBClient(ApiClient):
             prefix = ""
         return f"{self.bot.config['log_url'].strip('/')}{'/' + prefix if prefix else ''}/{doc['key']}"
 
-    async def create_log_entry(self, recipient: Member, channel: TextChannel, creator: Member) -> str:
-        key = secrets.token_hex(6)
+    async def create_log_entry(
+        self, recipient: Member, channel: TextChannel, creator: Member, key: str = None
+    ) -> str:
+        key = key or secrets.token_hex(6)
 
         # Upload recipient / creator avatars to S3 when storage is enabled.
         storage = getattr(self.bot, "storage", None)

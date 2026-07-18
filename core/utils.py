@@ -27,6 +27,7 @@ __all__ = [
     "parse_channel_topic",
     "match_title",
     "match_user_id",
+    "match_ticket_id",
     "match_other_recipients",
     "create_thread_channel",
     "create_not_found_embed",
@@ -252,6 +253,7 @@ def cleanup_code(content: str) -> str:
 TOPIC_REGEX = re.compile(
     r"(?:\bTitle:\s*(?P<title>.*)\n)?"
     r"\bUser ID:\s*(?P<user_id>\d{17,21})\b"
+    r"(?:\nTicket ID:\s*(?P<ticket_id>[0-9a-f]{12})\b)?"
     r"(?:\nOther Recipients:\s*(?P<other_ids>\d{17,21}(?:(?:\s*,\s*)\d{17,21})*)\b)?",
     flags=re.IGNORECASE | re.DOTALL,
 )
@@ -339,6 +341,28 @@ def match_user_id(text: str, any_string: bool = False) -> int:
         user_id = parse_channel_topic(text)[1]
 
     return user_id
+
+
+def match_ticket_id(text: str) -> typing.Optional[str]:
+    """
+    Matches a ticket ID in the format of "Ticket ID: <hex>".
+
+    Parameters
+    ----------
+    text : str
+        The text of the channel topic.
+
+    Returns
+    -------
+    Optional[str]
+        The ticket ID (hex key) if found. Otherwise, None.
+    """
+    if not isinstance(text, str):
+        return None
+    match = TOPIC_REGEX.search(text)
+    if match is None:
+        return None
+    return match.groupdict().get("ticket_id")
 
 
 def match_other_recipients(text: str) -> typing.List[int]:
@@ -486,16 +510,22 @@ def get_top_role(member: discord.Member, hoisted=True):
             return role
 
 
-async def create_thread_channel(bot, recipient, category, overwrites, *, name=None, errors_raised=None):
+async def create_thread_channel(
+    bot, recipient, category, overwrites, *, name=None, errors_raised=None, ticket_key=None
+):
     name = name or bot.format_channel_name(recipient)
     errors_raised = errors_raised or []
+
+    topic = f"User ID: {recipient.id}"
+    if ticket_key:
+        topic += f"\nTicket ID: {ticket_key}"
 
     try:
         channel = await bot.modmail_guild.create_text_channel(
             name=name,
             category=category,
             overwrites=overwrites,
-            topic=f"User ID: {recipient.id}",
+            topic=topic,
             reason="Creating a thread channel.",
         )
     except discord.HTTPException as e:
@@ -519,7 +549,7 @@ async def create_thread_channel(bot, recipient, category, overwrites, *, name=No
                 await bot.config.update()
 
             return await create_thread_channel(
-                bot, recipient, fallback, overwrites, errors_raised=errors_raised
+                bot, recipient, fallback, overwrites, errors_raised=errors_raised, ticket_key=ticket_key
             )
 
         if "Contains words not allowed" in e.text:
@@ -531,6 +561,7 @@ async def create_thread_channel(bot, recipient, category, overwrites, *, name=No
                 overwrites,
                 name=bot.format_channel_name(recipient, force_null=True),
                 errors_raised=errors_raised,
+                ticket_key=ticket_key,
             )
 
         raise

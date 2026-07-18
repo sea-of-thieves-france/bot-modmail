@@ -1,0 +1,22 @@
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "sqlite"
+
+replication_factor = 1
+
+rpc_bind_addr = "0.0.0.0:3901"
+rpc_secret = "0fadbd263965f7f625f8a107a883a5944de95d8c9579714f3ddd5ecff2f61a9a"
+
+[s3_api]
+api_bind_addr = "0.0.0.0:9000"
+s3_region = "garage"
+
+# Enable per-bucket with: garage bucket website --allow-read <bucket>
+[s3_web]
+bind_addr = "0.0.0.0:3902"
+root_domain = ".localhost"
+
+[admin]
+bind_addr = "0.0.0.0:3903"
+admin_token = "sRns8AOY40ZfKAa8smflYktTTVDmwJEbGr30uorQtEg="
+metrics_token = "fkCa5g+uthc4w68BGIeKI2VM9HDEQwbzXm2cSXLyid0="

@@ -4,6 +4,7 @@ import base64
 import functools
 import io
 import re
+import secrets
 import time
 import traceback
 import typing
@@ -26,6 +27,7 @@ from core.utils import (
     parse_channel_topic,
     match_title,
     match_user_id,
+    match_ticket_id,
     truncate,
     get_top_role,
     create_thread_channel,
@@ -800,11 +802,18 @@ class Thread:
         if category is not None:
             overwrites = {}
 
+        # Pre-generate the ticket key so it can be written into the channel topic at
+        # creation time (single write, no extra edit) and stored on the log entry.
+        key = secrets.token_hex(6)
+        self.log_key = key
+
         # If thread menu is enabled and this setup call is marked as deferred genesis (initial_message carries flag),
         # then we may have already created the channel earlier. Only create if channel missing.
         if self._channel is None:
             try:
-                channel = await create_thread_channel(self.bot, recipient, category, overwrites)
+                channel = await create_thread_channel(
+                    self.bot, recipient, category, overwrites, ticket_key=key
+                )
             except discord.HTTPException as e:  # Failed to create due to missing perms.
                 logger.critical("An error occurred while creating a thread.", exc_info=True)
                 self.manager.cache.pop(self.id)
@@ -819,10 +828,32 @@ class Thread:
                 return
             else:
                 self._channel = channel
+        else:
+            channel = self._channel
+            # Channel was created earlier (deferred genesis): if it already carries a
+            # Ticket ID, reuse it so the topic and the DB log entry stay in sync;
+            # otherwise backfill the freshly generated key into the topic.
+            existing_ticket_id = match_ticket_id(channel.topic)
+            if existing_ticket_id:
+                key = existing_ticket_id
+                self.log_key = key
+            else:
+                title, user_id, other_ids = parse_channel_topic(channel.topic)
+                topic = ""
+                if title is not None:
+                    topic += f"Title: {title}\n"
+                topic += f"User ID: {user_id if user_id != -1 else recipient.id}"
+                topic += f"\nTicket ID: {key}"
+                if other_ids:
+                    topic += f"\nOther Recipients: {','.join(str(i) for i in other_ids)}"
+                try:
+                    await channel.edit(topic=topic)
+                except Exception:
+                    logger.warning("Failed to backfill Ticket ID into channel topic.", exc_info=True)
 
         try:
             log_url, log_data = await asyncio.gather(
-                self.bot.api.create_log_entry(recipient, channel, creator or recipient),
+                self.bot.api.create_log_entry(recipient, channel, creator or recipient, key=key),
                 self.bot.api.get_user_logs(recipient.id),
             )
 
@@ -1026,6 +1057,15 @@ class Thread:
             embed.description += f" {connector} **{log_count or 'no'}** past {thread}."
         else:
             embed.description += "."
+
+        # Surface the ticket ID (hex key) so staff can read/copy it from the thread.
+        # Placed after the Roles field so the genesis detector (fields[0] == "Roles")
+        # is not disturbed. Fall back to the log_url tail, which is the same key.
+        ticket_key = self.log_key
+        if not ticket_key and log_url:
+            ticket_key = log_url.rstrip("/").split("/")[-1]
+        if ticket_key:
+            embed.add_field(name="Ticket ID", value=f"`{ticket_key}`", inline=True)
 
         mutual_guilds = [g for g in self.bot.guilds if user in g.members]
         if member is None or len(mutual_guilds) > 1:
@@ -2262,6 +2302,10 @@ class Thread:
         user_id = match_user_id(self.channel.topic)
         topic += f"User ID: {user_id}"
 
+        ticket_id = match_ticket_id(self.channel.topic)
+        if ticket_id:
+            topic += f"\nTicket ID: {ticket_id}"
+
         if self._other_recipients:
             ids = ",".join(str(i.id) for i in self._other_recipients)
             topic += f"\nOther Recipients: {ids}"
@@ -2296,6 +2340,10 @@ class Thread:
 
         topic += f"User ID: {self._id}"
 
+        ticket_id = match_ticket_id(self.channel.topic)
+        if ticket_id:
+            topic += f"\nTicket ID: {ticket_id}"
+
         self._other_recipients += users
         self._other_recipients = list(set(self._other_recipients))
 
@@ -2313,6 +2361,10 @@ class Thread:
             topic += f"Title: {title}\n"
 
         topic += f"User ID: {user_id}"
+
+        ticket_id = match_ticket_id(self.channel.topic)
+        if ticket_id:
+            topic += f"\nTicket ID: {ticket_id}"
 
         for u in users:
             self._other_recipients.remove(u)
