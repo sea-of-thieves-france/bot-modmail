@@ -9,6 +9,21 @@ Exposes a small websocket server so an external moderation dashboard
 * send moderator replies that are relayed to the recipient's DM and mirrored into
   the thread channel through the normal :meth:`Thread.reply` pipeline.
 
+Topology
+--------
+This socket is a **server-to-server** surface. The only intended client is the
+``web-dashboard`` **backend API**, never a browser:
+
+    browser <-(OAuth session, WS/SSE)-> web-dashboard API <-(this socket)-> bot
+
+* Moderator actions go browser -> API -> bot; the API injects the trusted ``mod_id``.
+* Live "something changed" signals go bot -> API, and the API refetches the thread
+  from Mongo/Logviewer and pushes the fresh view to browsers. The bot is never on the
+  read path.
+* A browser cannot connect here even if it wanted to: the connection is authenticated
+  with an ``Authorization`` header, which the browser WebSocket API cannot set. Only a
+  backend holding ``DASHBOARD_WS_SECRET`` can complete the handshake.
+
 Trust model
 -----------
 The dashboard authenticates its Discord moderators itself (Discord OAuth against its
@@ -18,7 +33,9 @@ own API); the bot never sees those tokens.  Instead:
   (``DASHBOARD_WS_SECRET``) sent as ``Authorization: Bearer <secret>``;
 * every reply frame carries the acting moderator's Discord ``mod_id``; the bot
   resolves the guild member and enforces the **existing** ``PermissionLevel`` for the
-  ``reply`` command before sending anything.
+  ``reply`` command before sending anything;
+* replies may include an opaque ``request_id`` that the bot echoes back on the
+  matching ``reply_ack`` so the API can correlate acks across multiplexed moderators.
 
 The whole feature is opt-in: if ``DASHBOARD_WS_SECRET`` is not set, the cog loads but
 starts no server.
@@ -226,11 +243,26 @@ class Dashboard(commands.Cog):
         if action == "reply":
             await self._handle_reply(ws, payload)
         else:
-            await self._send(ws, {"type": "error", "error": "unknown_action"})
+            await self._send(
+                ws,
+                {
+                    "type": "error",
+                    "error": "unknown_action",
+                    "request_id": payload.get("request_id") if isinstance(payload, dict) else None,
+                },
+            )
 
     async def _handle_reply(self, ws: web.WebSocketResponse, payload: dict):
+        # Correlation id: the dashboard API multiplexes many moderators over the
+        # single bot connection, so it must be able to match each ack/nack back to
+        # the request (and thus the browser) that produced it. Echoed verbatim.
+        request_id = payload.get("request_id")
+
         async def nack(error):
-            await self._send(ws, {"type": "reply_ack", "ok": False, "error": error})
+            await self._send(
+                ws,
+                {"type": "reply_ack", "ok": False, "error": error, "request_id": request_id},
+            )
 
         await self.bot.wait_until_ready()
 
@@ -283,7 +315,7 @@ class Dashboard(commands.Cog):
             logger.error("Dashboard reply failed to send.", exc_info=True)
             return await nack("send_failed")
 
-        await self._send(ws, {"type": "reply_ack", "ok": True})
+        await self._send(ws, {"type": "reply_ack", "ok": True, "request_id": request_id})
 
     async def _build_attachments(self, raw_attachments: list) -> list:
         attachments = []
