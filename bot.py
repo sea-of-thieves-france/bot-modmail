@@ -90,6 +90,7 @@ class ModmailBot(commands.Bot):
             "cogs.plugins",
             "cogs.utility",
             "cogs.threadmenu",
+            "cogs.dashboard",
         ]
         self._connected = None
         self.start_time = discord.utils.utcnow()

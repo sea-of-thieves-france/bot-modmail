@@ -11,6 +11,11 @@ services:
     depends_on:
       - mongo
       - garage
+    # Dashboard websocket bridge. Reachable as ws://bot:8765/ws from other services on
+    # this network (e.g. web-dashboard). Publish the host port only if the dashboard runs
+    # outside this compose network; keep it internal otherwise.
+    ports:
+      - "8765:8765"
 
   logviewer:
     image: ghcr.io/modmail-dev/logviewer:master
