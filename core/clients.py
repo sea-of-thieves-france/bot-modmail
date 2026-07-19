@@ -349,6 +349,14 @@ class ApiClient:
     def tickets(self):
         return self.db.tickets
 
+    def get_log_url(self, key: str) -> str:
+        """Build the logviewer URL for a ticket key from the configured
+        ``log_url`` and ``log_url_prefix`` (``"NONE"`` disables the prefix)."""
+        prefix = self.bot.config["log_url_prefix"].strip("/")
+        if prefix == "NONE":
+            prefix = ""
+        return f"{self.bot.config['log_url'].strip('/')}{'/' + prefix if prefix else ''}/{key}"
+
     async def setup_indexes(self):
         return NotImplemented
 
@@ -599,10 +607,7 @@ class MongoDBClient(ApiClient):
     async def get_log_link(self, channel_id: Union[str, int]) -> str:
         doc = await self.get_log(channel_id)
         logger.debug("Retrieving log link for channel %s.", channel_id)
-        prefix = self.bot.config["log_url_prefix"].strip("/")
-        if prefix == "NONE":
-            prefix = ""
-        return f"{self.bot.config['log_url'].strip('/')}{'/' + prefix if prefix else ''}/{doc['key']}"
+        return self.get_log_url(doc["key"])
 
     async def create_log_entry(
         self, recipient: Member, channel: TextChannel, creator: Member, key: str = None
@@ -658,10 +663,7 @@ class MongoDBClient(ApiClient):
             }
         )
         logger.debug("Created a log entry, key %s.", key)
-        prefix = self.bot.config["log_url_prefix"].strip("/")
-        if prefix == "NONE":
-            prefix = ""
-        return f"{self.bot.config['log_url'].strip('/')}{'/' + prefix if prefix else ''}/{key}"
+        return self.get_log_url(key)
 
     async def delete_log_entry(self, key: str) -> bool:
         result = await self.tickets.delete_one({"key": key})

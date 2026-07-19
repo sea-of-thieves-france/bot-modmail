@@ -25,6 +25,7 @@ __all__ = [
     "days",
     "cleanup_code",
     "parse_channel_topic",
+    "build_channel_topic",
     "match_title",
     "match_user_id",
     "match_ticket_id",
@@ -258,6 +259,41 @@ TOPIC_REGEX = re.compile(
     flags=re.IGNORECASE | re.DOTALL,
 )
 UID_REGEX = re.compile(r"\bUser ID:\s*(\d{17,21})\b", flags=re.IGNORECASE)
+# Matches the 12-hex ticket key from the logviewer-URL path segment of a topic, e.g.
+# "https://logs.site.com/tickets/abc123def456". The URL is the first line of the topic,
+# so this is not anchored to the end of the string.
+TICKET_ID_URL_REGEX = re.compile(r"/(?P<ticket_id>[0-9a-f]{12})(?![0-9a-f])", flags=re.IGNORECASE)
+# Visual separator placed between the logviewer URL and the metadata lines in a topic.
+TOPIC_SEPARATOR = "─"
+
+
+def build_channel_topic(
+    bot,
+    user_id: typing.Union[int, str],
+    *,
+    ticket_key: typing.Optional[str] = None,
+    title: typing.Optional[str] = None,
+    other_ids: typing.Optional[typing.List[typing.Union[int, str]]] = None,
+) -> str:
+    """
+    Build a thread channel topic.
+
+    The logviewer URL is placed on the first line (when a ticket key is known), followed
+    by the structured, machine-parsed fields the bot relies on for routing
+    (``parse_channel_topic``). The ticket key is the last path segment of the URL, so it
+    is not repeated in a separate "Ticket ID" line; only "User ID" / "Other Recipients"
+    are kept alongside the URL.
+    """
+    lines = []
+    if ticket_key:
+        lines.append(bot.api.get_log_url(ticket_key))
+        lines.append(TOPIC_SEPARATOR)  # separator between the URL and the metadata
+    if title:
+        lines.append(f"Title: {title}")
+    lines.append(f"User ID: {user_id}")
+    if other_ids:
+        lines.append("Other Recipients: " + ",".join(str(i) for i in other_ids))
+    return "\n".join(lines)
 
 
 def parse_channel_topic(
@@ -345,7 +381,11 @@ def match_user_id(text: str, any_string: bool = False) -> int:
 
 def match_ticket_id(text: str) -> typing.Optional[str]:
     """
-    Matches a ticket ID in the format of "Ticket ID: <hex>".
+    Matches a ticket ID (12-hex key) in a channel topic.
+
+    Supports both the legacy structured topic ("Ticket ID: <hex>") and the newer
+    logviewer-URL topic (e.g. "https://logs.site.com/tickets/<hex>"), where the key
+    is the trailing path segment.
 
     Parameters
     ----------
@@ -360,9 +400,13 @@ def match_ticket_id(text: str) -> typing.Optional[str]:
     if not isinstance(text, str):
         return None
     match = TOPIC_REGEX.search(text)
-    if match is None:
-        return None
-    return match.groupdict().get("ticket_id")
+    if match is not None and match.groupdict().get("ticket_id"):
+        return match.groupdict()["ticket_id"]
+    # Fall back to a URL-only topic: pull the trailing 12-hex key.
+    url_match = TICKET_ID_URL_REGEX.search(text)
+    if url_match is not None:
+        return url_match.group("ticket_id")
+    return None
 
 
 def match_other_recipients(text: str) -> typing.List[int]:
@@ -516,9 +560,7 @@ async def create_thread_channel(
     name = name or bot.format_channel_name(recipient)
     errors_raised = errors_raised or []
 
-    topic = f"User ID: {recipient.id}"
-    if ticket_key:
-        topic += f"\nTicket ID: {ticket_key}"
+    topic = build_channel_topic(bot, recipient.id, ticket_key=ticket_key)
 
     try:
         channel = await bot.modmail_guild.create_text_channel(

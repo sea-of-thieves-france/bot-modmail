@@ -25,6 +25,7 @@ from core import checks
 from core.utils import (
     is_image_url,
     parse_channel_topic,
+    build_channel_topic,
     match_title,
     match_user_id,
     match_ticket_id,
@@ -839,13 +840,13 @@ class Thread:
                 self.log_key = key
             else:
                 title, user_id, other_ids = parse_channel_topic(channel.topic)
-                topic = ""
-                if title is not None:
-                    topic += f"Title: {title}\n"
-                topic += f"User ID: {user_id if user_id != -1 else recipient.id}"
-                topic += f"\nTicket ID: {key}"
-                if other_ids:
-                    topic += f"\nOther Recipients: {','.join(str(i) for i in other_ids)}"
+                topic = build_channel_topic(
+                    self.bot,
+                    user_id if user_id != -1 else recipient.id,
+                    ticket_key=key,
+                    title=title,
+                    other_ids=other_ids,
+                )
                 try:
                     await channel.edit(topic=topic)
                 except Exception:
@@ -2297,19 +2298,13 @@ class Thread:
         return " ".join(list(dict.fromkeys(mentions)))
 
     async def set_title(self, title: str) -> None:
-        topic = f"Title: {title}\n"
-
-        user_id = match_user_id(self.channel.topic)
-        topic += f"User ID: {user_id}"
-
-        ticket_id = match_ticket_id(self.channel.topic)
-        if ticket_id:
-            topic += f"\nTicket ID: {ticket_id}"
-
-        if self._other_recipients:
-            ids = ",".join(str(i.id) for i in self._other_recipients)
-            topic += f"\nOther Recipients: {ids}"
-
+        topic = build_channel_topic(
+            self.bot,
+            match_user_id(self.channel.topic),
+            ticket_key=match_ticket_id(self.channel.topic),
+            title=title,
+            other_ids=[i.id for i in self._other_recipients],
+        )
         await self.channel.edit(topic=topic)
 
     async def _update_users_genesis(self):
@@ -2333,45 +2328,35 @@ class Thread:
         await genesis_message.edit(embed=embed)
 
     async def add_users(self, users: typing.List[typing.Union[discord.Member, discord.User]]) -> None:
-        topic = ""
         title, _, _ = parse_channel_topic(self.channel.topic)
-        if title is not None:
-            topic += f"Title: {title}\n"
-
-        topic += f"User ID: {self._id}"
-
-        ticket_id = match_ticket_id(self.channel.topic)
-        if ticket_id:
-            topic += f"\nTicket ID: {ticket_id}"
 
         self._other_recipients += users
         self._other_recipients = list(set(self._other_recipients))
 
-        ids = ",".join(str(i.id) for i in self._other_recipients)
-
-        topic += f"\nOther Recipients: {ids}"
+        topic = build_channel_topic(
+            self.bot,
+            self._id,
+            ticket_key=match_ticket_id(self.channel.topic),
+            title=title,
+            other_ids=[i.id for i in self._other_recipients],
+        )
 
         await self.channel.edit(topic=topic)
         await self._update_users_genesis()
 
     async def remove_users(self, users: typing.List[typing.Union[discord.Member, discord.User]]) -> None:
-        topic = ""
         title, user_id, _ = parse_channel_topic(self.channel.topic)
-        if title is not None:
-            topic += f"Title: {title}\n"
-
-        topic += f"User ID: {user_id}"
-
-        ticket_id = match_ticket_id(self.channel.topic)
-        if ticket_id:
-            topic += f"\nTicket ID: {ticket_id}"
 
         for u in users:
             self._other_recipients.remove(u)
 
-        if self._other_recipients:
-            ids = ",".join(str(i.id) for i in self._other_recipients)
-            topic += f"\nOther Recipients: {ids}"
+        topic = build_channel_topic(
+            self.bot,
+            user_id,
+            ticket_key=match_ticket_id(self.channel.topic),
+            title=title,
+            other_ids=[i.id for i in self._other_recipients],
+        )
 
         await self.channel.edit(topic=topic)
         await self._update_users_genesis()
@@ -2470,7 +2455,13 @@ class ThreadManager:
                 )
                 if thread is not None:
                     logger.debug("Found thread with tempered ID.")
-                    await channel.edit(topic=f"User ID: {user_id}")
+                    await channel.edit(
+                        topic=build_channel_topic(
+                            self.bot,
+                            user_id,
+                            ticket_key=thread.log_key or match_ticket_id(channel.topic),
+                        )
+                    )
             return thread
 
         if recipient:
