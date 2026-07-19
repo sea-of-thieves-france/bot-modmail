@@ -81,13 +81,11 @@ class S3StorageClient:
         self.public_url: str = (raw_public or self.endpoint or "").rstrip("/")
         self._public_url_explicitly_set: bool = bool(raw_public)
 
-        self.enabled: bool = bool(
-            _HAS_AIOBOTOCORE and self.endpoint and self.access_key and self.secret_key
-        )
+        self.enabled: bool = bool(_HAS_AIOBOTOCORE and self.endpoint and self.access_key and self.secret_key)
 
         self._session = None
-        self._cm = None       # context manager returned by create_client()
-        self._client = None   # the actual low-level botocore client
+        self._cm = None  # context manager returned by create_client()
+        self._client = None  # the actual low-level botocore client
 
     # -------------------------------------------------------------------------
     # Lifecycle
@@ -97,9 +95,7 @@ class S3StorageClient:
         """Create the persistent aiobotocore S3 client and log the outcome."""
         if not self.enabled:
             if not _HAS_AIOBOTOCORE:
-                logger.warning(
-                    "aiobotocore is not installed; S3 attachment/avatar storage is disabled."
-                )
+                logger.warning("aiobotocore is not installed; S3 attachment/avatar storage is disabled.")
             else:
                 logger.info("S3 storage disabled (S3_ENDPOINT / S3_ACCESS_KEY / S3_SECRET_KEY not set).")
             return
@@ -254,7 +250,7 @@ class S3StorageClient:
         if not self.enabled or self._client is None:
             return None
 
-        hash_ = avatar.key            # e.g. "a_abc123" or "abc123def456"
+        hash_ = avatar.key  # e.g. "a_abc123" or "abc123def456"
         ext = "gif" if hash_.startswith("a_") else "webp"
         key = f"avatars/{user_id}/{hash_}.{ext}"
 
@@ -296,9 +292,7 @@ class S3StorageClient:
             logger.warning("Error uploading avatar to S3 (key=%r): %s", key, exc)
             return None
 
-    async def upload_bytes(
-        self, key: str, data: bytes, content_type: str
-    ) -> Optional[str]:
+    async def upload_bytes(self, key: str, data: bytes, content_type: str) -> Optional[str]:
         """
         Upload raw bytes to S3 under an explicit key.
 

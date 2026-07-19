@@ -15,7 +15,6 @@ from typing import Dict, Optional
 import discord
 from discord.ext import commands
 
-
 try:
     from colorama import Fore, Style
 except ImportError:

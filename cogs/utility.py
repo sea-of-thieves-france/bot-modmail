@@ -35,7 +35,6 @@ from core.models import (
 from core.utils import DummyParam
 from core.paginator import EmbedPaginatorSession, MessagePaginatorSession
 
-
 logger = getLogger(__name__)
 
 

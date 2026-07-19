@@ -1969,7 +1969,6 @@ class Modmail(commands.Cog):
             for mention, reason in roles:
                 line = mention + f" - {reason or 'No Reason Provided'}\n"
                 if len(embed.description) + len(line) > 2048:
-                    role_embeds[-1].set_author()
                     embed = discord.Embed(
                         title="Blocked Roles",
                         color=self.bot.main_color,
@@ -2093,12 +2092,8 @@ class Modmail(commands.Cog):
             if "%" in reason:
                 raise commands.BadArgument('The reason contains illegal character "%".')
 
-            if after.arg:
-                fmt_dt = discord.utils.format_dt(after.dt, "R")
             if after.dt > after.now:
-                fmt_dt = discord.utils.format_dt(after.dt, "f")
-
-            reason += f" until {fmt_dt}"
+                reason += f" until {discord.utils.format_dt(after.dt, 'f')}"
 
         reason += "."
 
@@ -2743,16 +2738,6 @@ class Modmail(commands.Cog):
     @snooze_auto_unsnooze.before_loop
     async def _snooze_auto_unsnooze_before(self):
         await self.bot.wait_until_ready()
-
-    async def process_dm_modmail(self, message: discord.Message) -> None:
-        # ... existing code ...
-        # Before processing, check if thread is snoozed and auto-unsnooze
-        thread = await self.threads.find(recipient=message.author)
-        if thread and thread.snoozed:
-            await thread.restore_from_snooze()
-            # Ensure the thread object in the cache is updated with the new channel
-            self.threads.cache[thread.id] = thread
-        # ... rest of the method unchanged ...
 
     @commands.command()
     @checks.has_permissions(PermissionLevel.OWNER)

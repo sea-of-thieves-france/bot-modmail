@@ -632,7 +632,7 @@ class MongoDBClient(ApiClient):
             creator_avatar = None
 
         recipient_avatar_key = recipient_avatar[0] if recipient_avatar else None
-        creator_avatar_key   = creator_avatar[0] if creator_avatar else None
+        creator_avatar_key = creator_avatar[0] if creator_avatar else None
 
         await self.tickets.insert_one(
             {
@@ -724,9 +724,7 @@ class MongoDBClient(ApiClient):
         storage = getattr(self.bot, "storage", None)
 
         if storage and storage.enabled and message.author.display_avatar:
-            avatar_result = await storage.upload_avatar(
-                message.author.id, message.author.display_avatar
-            )
+            avatar_result = await storage.upload_avatar(message.author.id, message.author.display_avatar)
         else:
             avatar_result = None
 
@@ -800,9 +798,7 @@ class MongoDBClient(ApiClient):
     async def create_note(self, recipient: Member, message: Message, message_id: Union[int, str]):
         storage = getattr(self.bot, "storage", None)
         if storage and storage.enabled and message.author.display_avatar:
-            note_avatar_result = await storage.upload_avatar(
-                message.author.id, message.author.display_avatar
-            )
+            note_avatar_result = await storage.upload_avatar(message.author.id, message.author.display_avatar)
         else:
             note_avatar_result = None
 

@@ -23,7 +23,6 @@ from discord.ext.commands.view import StringView
 from emoji import is_emoji
 from packaging.version import Version
 
-
 try:
     # noinspection PyUnresolvedReferences
     from colorama import init

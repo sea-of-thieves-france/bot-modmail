@@ -164,9 +164,7 @@ class Dashboard(commands.Cog):
     # ------------------------------------------------------------------ lifecycle
     async def cog_load(self):
         if not self.secret:
-            logger.info(
-                "Dashboard websocket disabled (DASHBOARD_WS_SECRET is not set)."
-            )
+            logger.info("Dashboard websocket disabled (DASHBOARD_WS_SECRET is not set).")
             return
         app = web.Application()
         app.router.add_get("/ws", self._handle_ws)
@@ -177,7 +175,9 @@ class Dashboard(commands.Cog):
             await self._site.start()
         except OSError:
             logger.error(
-                "Dashboard websocket failed to bind %s:%s.", self.host, self.port,
+                "Dashboard websocket failed to bind %s:%s.",
+                self.host,
+                self.port,
                 exc_info=True,
             )
             self._site = None
@@ -207,7 +207,7 @@ class Dashboard(commands.Cog):
         # Authenticate the connection with a constant-time secret comparison.
         provided = request.headers.get("Authorization", "")
         prefix = "Bearer "
-        token = provided[len(prefix):] if provided.startswith(prefix) else ""
+        token = provided[len(prefix) :] if provided.startswith(prefix) else ""
         if not (self.secret and token and hmac.compare_digest(token, self.secret)):
             logger.warning("Rejected dashboard websocket connection (bad secret).")
             return web.Response(status=401, text="unauthorized")
@@ -221,9 +221,7 @@ class Dashboard(commands.Cog):
                 if msg.type == WSMsgType.TEXT:
                     await self._on_text(ws, msg.data)
                 elif msg.type == WSMsgType.ERROR:
-                    logger.warning(
-                        "Dashboard websocket connection error: %s", ws.exception()
-                    )
+                    logger.warning("Dashboard websocket connection error: %s", ws.exception())
         finally:
             self._clients.discard(ws)
             logger.info(
@@ -376,9 +374,7 @@ class Dashboard(commands.Cog):
         if not self._clients:
             return
         recipient_id = str(thread.id) if thread.id else None
-        await self._broadcast(
-            self._signal(thread, type="thread_create", recipient_id=recipient_id)
-        )
+        await self._broadcast(self._signal(thread, type="thread_create", recipient_id=recipient_id))
 
     @commands.Cog.listener()
     async def on_thread_reply(self, thread, from_mod, message, anonymous, plain):
