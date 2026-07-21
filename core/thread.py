@@ -1810,38 +1810,6 @@ class Thread:
             Explicit text to use instead of ``message.content``. Provided by refactored
             reply commands to avoid mutating the original message object.
         """
-        # Handle notes with Discord-like system message format - return early
-        if note:
-            destination = destination or self.channel
-            content = message.content or "[No content]"
-
-            # Create embed for note with Discord system message style
-            embed = discord.Embed(
-                description=content, color=0x5865F2  # Discord blurple color for system messages
-            )
-
-            # Set author with note icon and username
-            if persistent_note:
-                note_type = "Persistent Note"
-            else:
-                note_type = "Note"
-
-            embed.set_author(
-                name=f"📝 {note_type} ({message.author.name})", icon_url=message.author.display_avatar.url
-            )
-
-            # Add timestamp if enabled
-            if self.bot.config["show_timestamp"]:
-                embed.timestamp = message.created_at
-
-            # Add a subtle footer to distinguish from replies
-            if persistent_note:
-                embed.set_footer(text="Persistent Internal Note")
-            else:
-                embed.set_footer(text="Internal Note")
-
-            return await destination.send(embed=embed)
-
         if not note and from_mod:
             self.bot.loop.create_task(self._restart_close_timer())  # Start or restart thread auto close
 
@@ -2126,42 +2094,41 @@ class Thread:
             embed.add_field(name=f"File upload ({file_upload_count})", value=f"[{filename}]({url})")
             file_upload_count += 1
 
-        if from_mod:
-            if note:
-                # Notes use Discord blurple and special footer
-                embed.colour = 0x5865F2
-                if persistent_note:
-                    embed.set_footer(text="Persistent Internal Note")
-                else:
-                    embed.set_footer(text="Internal Note")
+        if note:
+            # Notes use Discord blurple and special footer
+            embed.colour = 0x5865F2
+            if persistent_note:
+                embed.set_footer(text="Persistent Internal Note")
             else:
-                # Regular mod messages
-                embed.colour = self.bot.mod_color
-                # Anonymous reply sent in thread channel
-                if anonymous and isinstance(destination, discord.TextChannel):
-                    embed.set_footer(text="Anonymous Reply")
-                # Normal messages
-                elif not anonymous:
-                    # Use configured mod_tag if provided; otherwise fallback to
-                    # the author's top role when available, or their display name.
-                    mod_tag = self.bot.config["mod_tag"]
-                    if mod_tag is None:
-                        if hasattr(message.author, "roles"):
-                            try:
-                                mod_tag = str(
-                                    get_top_role(
-                                        message.author,
-                                        self.bot.config["use_hoisted_top_role"],
-                                    )  # type: ignore[arg-type]
-                                )
-                            except Exception:
-                                # As a safe fallback, prefer a stable display string
-                                mod_tag = getattr(message.author, "display_name", str(message.author))
-                        else:
+                embed.set_footer(text="Internal Note")
+        elif from_mod:
+            # Regular mod messages
+            embed.colour = self.bot.mod_color
+            # Anonymous reply sent in thread channel
+            if anonymous and isinstance(destination, discord.TextChannel):
+                embed.set_footer(text="Anonymous Reply")
+            # Normal messages
+            elif not anonymous:
+                # Use configured mod_tag if provided; otherwise fallback to
+                # the author's top role when available, or their display name.
+                mod_tag = self.bot.config["mod_tag"]
+                if mod_tag is None:
+                    if hasattr(message.author, "roles"):
+                        try:
+                            mod_tag = str(
+                                get_top_role(
+                                    message.author,
+                                    self.bot.config["use_hoisted_top_role"],
+                                )  # type: ignore[arg-type]
+                            )
+                        except Exception:
+                            # As a safe fallback, prefer a stable display string
                             mod_tag = getattr(message.author, "display_name", str(message.author))
-                    embed.set_footer(text=mod_tag)  # Normal messages
-                else:
-                    embed.set_footer(text=self.bot.config["anon_tag"])
+                    else:
+                        mod_tag = getattr(message.author, "display_name", str(message.author))
+                embed.set_footer(text=mod_tag)  # Normal messages
+            else:
+                embed.set_footer(text=self.bot.config["anon_tag"])
         else:
             # Add forwarded message indicator in footer for mods.
             # Covers both multi-forward (message_snapshots) and single-forward (MessageType.forward).
@@ -2175,7 +2142,9 @@ class Thread:
             embed.set_footer(text=footer_text)
             embed.colour = self.bot.recipient_color
 
-        if (from_mod or note) and not thread_creation:
+        # Notes clean up their own invocation message in the command callback (after the
+        # confirmation reaction), so don't delete it here.
+        if from_mod and not thread_creation:
             delete_message = not bool(message.attachments)
             # Only delete the source command message when it's in a guild text
             # channel; attempting to delete a DM message can raise 50003.

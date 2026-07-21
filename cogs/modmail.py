@@ -1625,13 +1625,16 @@ class Modmail(commands.Cog):
         async with safe_typing(ctx):
             msg = await ctx.thread.note(ctx.message)
             await msg.pin()
-        # Acknowledge and clean up the invoking command message
+        # Acknowledge and clean up the invoking command message. Messages carrying
+        # attachments are kept: the note embed links to them and deleting the source
+        # would break those links when S3 storage is disabled.
         sent_emoji, _ = await self.bot.retrieve_emoji()
         await self.bot.add_reaction(ctx.message, sent_emoji)
-        try:
-            await ctx.message.delete(delay=3)
-        except (discord.Forbidden, discord.NotFound):
-            pass
+        if not ctx.message.attachments:
+            try:
+                await ctx.message.delete(delay=3)
+            except (discord.Forbidden, discord.NotFound):
+                pass
 
     @note.command(name="persistent", aliases=["persist"])
     @checks.has_permissions(PermissionLevel.SUPPORTER)
@@ -1645,13 +1648,16 @@ class Modmail(commands.Cog):
             msg = await ctx.thread.note(ctx.message, persistent=True)
             await msg.pin()
         await self.bot.api.create_note(recipient=ctx.thread.recipient, message=ctx.message, message_id=msg.id)
-        # Acknowledge and clean up the invoking command message
+        # Acknowledge and clean up the invoking command message. Messages carrying
+        # attachments are kept: the note embed links to them and deleting the source
+        # would break those links when S3 storage is disabled.
         sent_emoji, _ = await self.bot.retrieve_emoji()
         await self.bot.add_reaction(ctx.message, sent_emoji)
-        try:
-            await ctx.message.delete(delay=3)
-        except (discord.Forbidden, discord.NotFound) as e:
-            logger.debug(f"Failed to delete note command message: {e}")
+        if not ctx.message.attachments:
+            try:
+                await ctx.message.delete(delay=3)
+            except (discord.Forbidden, discord.NotFound) as e:
+                logger.debug(f"Failed to delete note command message: {e}")
 
     @commands.command()
     @checks.has_permissions(PermissionLevel.SUPPORTER)
