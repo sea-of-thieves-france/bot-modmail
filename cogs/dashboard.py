@@ -153,9 +153,7 @@ class Dashboard(commands.Cog):
     # ------------------------------------------------------------------ lifecycle
     async def cog_load(self):
         if not self.secret or not self.url:
-            logger.info(
-                "Dashboard hub client disabled (set DASHBOARD_WS_SECRET and DASHBOARD_API_URL)."
-            )
+            logger.info("Dashboard hub client disabled (set DASHBOARD_WS_SECRET and DASHBOARD_API_URL).")
             return
         # Connect in the background: cog_load runs inside setup_hook, before the
         # gateway READY, so we must not await wait_until_ready() here (deadlock).
@@ -184,9 +182,7 @@ class Dashboard(commands.Cog):
         delay = 1
         while not self.sio.connected:
             try:
-                await self.sio.connect(
-                    self.url, auth=auth, namespaces=[NAMESPACE], transports=["websocket"]
-                )
+                await self.sio.connect(self.url, auth=auth, namespaces=[NAMESPACE], transports=["websocket"])
                 return
             except asyncio.CancelledError:
                 raise
