@@ -1,69 +1,58 @@
 """
-Dashboard websocket bridge
-==========================
+Dashboard realtime client
+=========================
 
-Exposes a small websocket server so an external moderation dashboard
-(``web-dashboard``) can:
+Dials the moderation dashboard's realtime hub so the bot can:
 
-* receive lightweight "something changed" signals for threads (targeted refetch),
-* send moderator replies that are relayed to the recipient's DM and mirrored into
-  the thread channel through the normal :meth:`Thread.reply` pipeline.
+* send lightweight "something changed" signals for threads (targeted refetch),
+* receive moderator replies (with a native socket.io **ack**) that are relayed to
+  the recipient's DM and mirrored into the thread via :meth:`Thread.reply`.
 
-Topology
---------
-This socket is a **server-to-server** surface. The only intended client is the
-``web-dashboard`` **backend API**, never a browser:
+Topology (inverted vs. the old design)
+--------------------------------------
+The **API hosts** the realtime hub (a secret-authenticated ``/modmail`` socket.io
+namespace); the **bot dials in as an outbound client** — zero inbound ports::
 
-    browser <-(OAuth session, WS/SSE)-> web-dashboard API <-(this socket)-> bot
+    browser <-(socket.io default ns, JWT)-> web-dashboard API <-(/modmail ns, secret)-> bot
 
-* Moderator actions go browser -> API -> bot; the API injects the trusted ``mod_id``.
-* Live "something changed" signals go bot -> API, and the API refetches the thread
-  from Mongo/Logviewer and pushes the fresh view to browsers. The bot is never on the
-  read path.
-* A browser cannot connect here even if it wanted to: the connection is authenticated
-  with an ``Authorization`` header, which the browser WebSocket API cannot set. Only a
-  backend holding ``DASHBOARD_WS_SECRET`` can complete the handshake.
+* Moderator replies go browser -> API -> bot; the API injects the trusted ``mod_id``
+  and the bot enforces the existing ``PermissionLevel`` before sending anything.
+* Signals go bot -> API; the API refetches from Mongo and pushes to browsers.
 
 Trust model
 -----------
-The dashboard authenticates its Discord moderators itself (Discord OAuth against its
-own API); the bot never sees those tokens.  Instead:
+* the socket *connection* is authenticated by a shared secret sent in the socket.io
+  handshake ``auth`` (``{secret, bot_id, guild_id}``); constant-time-compared API-side;
+* every reply frame carries the acting moderator's Discord ``mod_id``; the bot resolves
+  the guild member and enforces the ``reply`` ``PermissionLevel``;
+* the reply handler's **return value is the ack** (``{ok, error?}``) — no request_id map.
 
-* the websocket *connection* is authenticated with a shared secret
-  (``DASHBOARD_WS_SECRET``) sent as ``Authorization: Bearer <secret>``;
-* every reply frame carries the acting moderator's Discord ``mod_id``; the bot
-  resolves the guild member and enforces the **existing** ``PermissionLevel`` for the
-  ``reply`` command before sending anything;
-* replies may include an opaque ``request_id`` that the bot echoes back on the
-  matching ``reply_ack`` so the API can correlate acks across multiplexed moderators.
-
-The whole feature is opt-in: if ``DASHBOARD_WS_SECRET`` is not set, the cog loads but
-starts no server.
+Opt-in: if ``DASHBOARD_WS_SECRET`` or ``DASHBOARD_API_URL`` is unset, the cog loads
+but never connects.
 
 Configuration (environment / .env)
 ----------------------------------
     DASHBOARD_WS_SECRET          shared secret; feature disabled when unset
-    DASHBOARD_WS_HOST            bind host (default 0.0.0.0)
-    DASHBOARD_WS_PORT            bind port (default 8765)
+    DASHBOARD_API_URL            hub URL (dev http://sotfr-api:4000, prod wss://api.sotfr.net)
     DASHBOARD_MAX_ATTACHMENT_MB  per-file size cap for relayed attachments (default 8)
 """
 
 import asyncio
-import hmac
-import json
 import os
 from types import SimpleNamespace
 
 import discord
-from aiohttp import web, WSMsgType
+import socketio
 from discord.ext import commands
 
 from core import checks
 from core.models import getLogger
+from core.utils import match_ticket_id
 
 logger = getLogger(__name__)
 
 MAX_ATTACHMENTS = 10
+NAMESPACE = "/modmail"
 
 
 class _DashboardAttachment:
@@ -140,16 +129,12 @@ class _DashboardMessage:
 
 
 class Dashboard(commands.Cog):
-    """Websocket bridge between the bot and the moderation dashboard."""
+    """Socket.io client dialing the dashboard realtime hub."""
 
     def __init__(self, bot):
         self.bot = bot
         self.secret = (os.environ.get("DASHBOARD_WS_SECRET") or "").strip()
-        self.host = (os.environ.get("DASHBOARD_WS_HOST") or "0.0.0.0").strip()
-        try:
-            self.port = int(os.environ.get("DASHBOARD_WS_PORT") or 8765)
-        except ValueError:
-            self.port = 8765
+        self.url = (os.environ.get("DASHBOARD_API_URL") or "").strip()
         try:
             self.max_attachment_bytes = int(
                 float(os.environ.get("DASHBOARD_MAX_ATTACHMENT_MB") or 8) * 1024 * 1024
@@ -157,136 +142,105 @@ class Dashboard(commands.Cog):
         except ValueError:
             self.max_attachment_bytes = 8 * 1024 * 1024
 
-        self._runner: web.AppRunner = None
-        self._site: web.TCPSite = None
-        self._clients: set = set()
+        # reconnection=True gives us native backoff/resume; no manual reconnect loop.
+        self.sio = socketio.AsyncClient(reconnection=True, logger=False, engineio_logger=False)
+        self.sio.on("connect", self._on_connect, namespace=NAMESPACE)
+        self.sio.on("disconnect", self._on_disconnect, namespace=NAMESPACE)
+        self.sio.on("reply", self._on_reply, namespace=NAMESPACE)
+
+        self._connect_task = None
 
     # ------------------------------------------------------------------ lifecycle
     async def cog_load(self):
-        if not self.secret:
-            logger.info("Dashboard websocket disabled (DASHBOARD_WS_SECRET is not set).")
-            return
-        app = web.Application()
-        app.router.add_get("/ws", self._handle_ws)
-        self._runner = web.AppRunner(app)
-        await self._runner.setup()
-        self._site = web.TCPSite(self._runner, self.host, self.port)
-        try:
-            await self._site.start()
-        except OSError:
-            logger.error(
-                "Dashboard websocket failed to bind %s:%s.",
-                self.host,
-                self.port,
-                exc_info=True,
+        if not self.secret or not self.url:
+            logger.info(
+                "Dashboard hub client disabled (set DASHBOARD_WS_SECRET and DASHBOARD_API_URL)."
             )
-            self._site = None
             return
-        logger.info("Dashboard websocket listening on ws://%s:%s/ws", self.host, self.port)
+        # Connect in the background: cog_load runs inside setup_hook, before the
+        # gateway READY, so we must not await wait_until_ready() here (deadlock).
+        self._connect_task = self.bot.loop.create_task(self._run())
 
     async def cog_unload(self):
-        for ws in list(self._clients):
-            try:
-                await ws.close()
-            except Exception:
-                pass
-        self._clients.clear()
-        if self._site is not None:
-            try:
-                await self._site.stop()
-            except Exception:
-                pass
-        if self._runner is not None:
-            try:
-                await self._runner.cleanup()
-            except Exception:
-                pass
-
-    # --------------------------------------------------------------------- server
-    async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
-        # Authenticate the connection with a constant-time secret comparison.
-        provided = request.headers.get("Authorization", "")
-        prefix = "Bearer "
-        token = provided[len(prefix) :] if provided.startswith(prefix) else ""
-        if not (self.secret and token and hmac.compare_digest(token, self.secret)):
-            logger.warning("Rejected dashboard websocket connection (bad secret).")
-            return web.Response(status=401, text="unauthorized")
-
-        ws = web.WebSocketResponse(heartbeat=30)
-        await ws.prepare(request)
-        self._clients.add(ws)
-        logger.info("Dashboard websocket client connected (%d total).", len(self._clients))
+        if self._connect_task is not None:
+            self._connect_task.cancel()
         try:
-            async for msg in ws:
-                if msg.type == WSMsgType.TEXT:
-                    await self._on_text(ws, msg.data)
-                elif msg.type == WSMsgType.ERROR:
-                    logger.warning("Dashboard websocket connection error: %s", ws.exception())
-        finally:
-            self._clients.discard(ws)
-            logger.info(
-                "Dashboard websocket client disconnected (%d remaining).",
-                len(self._clients),
-            )
-        return ws
+            if self.sio.connected:
+                await self.sio.disconnect()
+        except Exception:
+            pass
 
-    async def _on_text(self, ws: web.WebSocketResponse, data: str):
-        try:
-            payload = json.loads(data)
-        except (ValueError, TypeError):
-            await self._send(ws, {"type": "error", "error": "invalid_json"})
-            return
-
-        action = payload.get("action")
-        if action == "reply":
-            await self._handle_reply(ws, payload)
-        else:
-            await self._send(
-                ws,
-                {
-                    "type": "error",
-                    "error": "unknown_action",
-                    "request_id": payload.get("request_id") if isinstance(payload, dict) else None,
-                },
-            )
-
-    async def _handle_reply(self, ws: web.WebSocketResponse, payload: dict):
-        # Correlation id: the dashboard API multiplexes many moderators over the
-        # single bot connection, so it must be able to match each ack/nack back to
-        # the request (and thus the browser) that produced it. Echoed verbatim.
-        request_id = payload.get("request_id")
-
-        async def nack(error):
-            await self._send(
-                ws,
-                {"type": "reply_ack", "ok": False, "error": error, "request_id": request_id},
-            )
-
+    async def _run(self):
         await self.bot.wait_until_ready()
+        if not self.bot.guild_id:
+            logger.warning("Dashboard hub client disabled (no GUILD_ID configured).")
+            return
+        auth = {
+            "secret": self.secret,
+            "bot_id": str(self.bot.user.id),
+            "guild_id": str(self.bot.guild_id),
+        }
+        # Retry only the *initial* connect; socket.io handles drops after that.
+        delay = 1
+        while not self.sio.connected:
+            try:
+                await self.sio.connect(
+                    self.url, auth=auth, namespaces=[NAMESPACE], transports=["websocket"]
+                )
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning(
+                    "Dashboard hub connect to %s failed; retrying in %ss.",
+                    self.url,
+                    delay,
+                    exc_info=True,
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 30)
 
-        content = (payload.get("content") or "").strip()
-        raw_attachments = payload.get("attachments") or []
+    # -------------------------------------------------------------- hub callbacks
+    async def _on_connect(self):
+        logger.info("Dashboard hub connected (%s at %s).", NAMESPACE, self.url)
+        # Ask the API to refresh any moderator views that went stale while we were away.
+        try:
+            await self.sio.emit("resync", namespace=NAMESPACE)
+        except Exception:
+            logger.debug("resync emit failed.", exc_info=True)
+
+    async def _on_disconnect(self):
+        logger.warning("Dashboard hub disconnected (%s).", NAMESPACE)
+
+    async def _on_reply(self, data):
+        """Handle an API->bot reply; the return value becomes the socket.io ack."""
+        await self.bot.wait_until_ready()
+        if not isinstance(data, dict):
+            return {"ok": False, "error": "bad_ids"}
+
+        content = (data.get("content") or "").strip()
+        raw_attachments = data.get("attachments") or []
         if not content and not raw_attachments:
-            return await nack("empty_message")
+            return {"ok": False, "error": "empty_message"}
 
         # Resolve the thread from its channel.
         try:
-            channel_id = int(payload.get("channel_id"))
-            mod_id = int(payload.get("mod_id"))
+            channel_id = int(data.get("channel_id"))
+            mod_id = int(data.get("mod_id"))
         except (TypeError, ValueError):
-            return await nack("bad_ids")
+            return {"ok": False, "error": "bad_ids"}
 
         channel = self.bot.get_channel(channel_id)
         if not isinstance(channel, discord.TextChannel):
-            return await nack("thread_not_found")
+            return {"ok": False, "error": "thread_not_found"}
         thread = await self.bot.threads.find(channel=channel)
         if thread is None:
-            return await nack("thread_not_found")
+            return {"ok": False, "error": "thread_not_found"}
 
         # Resolve the acting moderator and enforce PermissionLevel for `reply`.
         member = self.bot.guild.get_member(mod_id) if self.bot.guild else None
         if member is None:
-            return await nack("mod_not_in_guild")
+            return {"ok": False, "error": "mod_not_in_guild"}
         fake_ctx = SimpleNamespace(
             bot=self.bot,
             author=member,
@@ -299,11 +253,10 @@ class Dashboard(commands.Cog):
             logger.warning("Permission check failed for dashboard reply.", exc_info=True)
             allowed = False
         if not allowed:
-            return await nack("forbidden")
+            return {"ok": False, "error": "forbidden"}
 
         # Build relayed attachments (fail-soft: a bad file is skipped, text still sends).
         attachments = await self._build_attachments(raw_attachments)
-
         message = _DashboardMessage(
             author=member, content=content, channel=thread.channel, attachments=attachments
         )
@@ -311,9 +264,9 @@ class Dashboard(commands.Cog):
             await thread.reply(message, content)
         except Exception:
             logger.error("Dashboard reply failed to send.", exc_info=True)
-            return await nack("send_failed")
+            return {"ok": False, "error": "send_failed"}
 
-        await self._send(ws, {"type": "reply_ack", "ok": True, "request_id": request_id})
+        return {"ok": True}
 
     async def _build_attachments(self, raw_attachments: list) -> list:
         attachments = []
@@ -343,57 +296,49 @@ class Dashboard(commands.Cog):
             attachments.append(_DashboardAttachment(url, filename, size))
         return attachments
 
-    # --------------------------------------------------------------- broadcasting
-    async def _send(self, ws: web.WebSocketResponse, obj: dict):
-        try:
-            await ws.send_str(json.dumps(obj))
-        except Exception:
-            self._clients.discard(ws)
-
-    async def _broadcast(self, obj: dict):
-        if not self._clients:
-            return
-        data = json.dumps(obj)
-        for ws in list(self._clients):
-            try:
-                await ws.send_str(data)
-            except Exception:
-                self._clients.discard(ws)
-
+    # ---------------------------------------------------------------- signals out
     def _signal(self, thread, **extra) -> dict:
+        # `log_key` is only populated on threads created by *this* process; a thread
+        # rebuilt from an existing channel (Threads._find_from_channel) has none, so
+        # fall back to the key embedded in the channel topic (same trick as
+        # Thread.reply's topic rebuild). Without it the API drops the signal.
+        channel = thread.channel
+        ticket_id = getattr(thread, "log_key", None)
+        if not ticket_id and channel is not None:
+            ticket_id = match_ticket_id(channel.topic or "")
         base = {
-            "channel_id": str(thread.channel.id) if thread.channel else None,
-            "ticket_id": getattr(thread, "log_key", None),
+            "channel_id": str(channel.id) if channel else None,
+            "ticket_id": ticket_id,
         }
         base.update(extra)
         return base
 
+    async def _emit(self, event: str, payload: dict):
+        if not self.sio.connected:
+            logger.info("[diag] %s not emitted: socket disconnected.", event)
+            return
+        try:
+            logger.info("[diag] emitting %s %s", event, payload)
+            await self.sio.emit(event, payload, namespace=NAMESPACE)
+        except Exception:
+            logger.debug("Failed to emit %s to dashboard hub.", event, exc_info=True)
+
     # -------------------------------------------------------------------- events
     @commands.Cog.listener()
     async def on_thread_create(self, thread):
-        if not self._clients:
-            return
         recipient_id = str(thread.id) if thread.id else None
-        await self._broadcast(self._signal(thread, type="thread_create", recipient_id=recipient_id))
+        await self._emit("thread_create", self._signal(thread, recipient_id=recipient_id))
 
     @commands.Cog.listener()
     async def on_thread_reply(self, thread, from_mod, message, anonymous, plain):
-        if not self._clients:
-            return
-        await self._broadcast(
-            self._signal(
-                thread,
-                type="thread_message",
-                from_mod=bool(from_mod),
-                ts=str(discord.utils.utcnow()),
-            )
+        await self._emit(
+            "thread_message",
+            self._signal(thread, from_mod=bool(from_mod), ts=str(discord.utils.utcnow())),
         )
 
     @commands.Cog.listener()
     async def on_thread_close(self, thread, closer, silent, delete_channel, message, scheduled):
-        if not self._clients:
-            return
-        await self._broadcast(self._signal(thread, type="thread_close"))
+        await self._emit("thread_close", self._signal(thread))
 
 
 async def setup(bot):

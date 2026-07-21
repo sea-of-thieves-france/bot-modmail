@@ -11,11 +11,11 @@ services:
     depends_on:
       - mongo
       - garage
-    # Dashboard websocket bridge. Reachable as ws://bot:8765/ws from other services on
-    # this network (e.g. web-dashboard). Publish the host port only if the dashboard runs
-    # outside this compose network; keep it internal otherwise.
-    ports:
-      - "8765:8765"
+    networks:
+      default: {}
+      # The bot dials the SoTFR api's /modmail socket.io namespace as an outbound
+      # client over this shared network (DASHBOARD_API_URL, e.g. http://sotfr-api:4000).
+      modmail-shared: {}
 
   logviewer:
     image: ghcr.io/modmail-dev/logviewer:master
@@ -30,6 +30,17 @@ services:
   mongo:
     image: mongo
     restart: always
+    # Expose MongoDB on the host for local testing/inspection (e.g. mongosh,
+    # Compass). Bound to 127.0.0.1 so it is not reachable from outside this host.
+    ports:
+      - "127.0.0.1:27018:27017"
+    networks:
+      default: {}
+      # Cross-project access (e.g. the SoTFR api) reaches this as
+      # bot-modmail-mongo-1:27017 over the shared modmail-shared network.
+      modmail-shared:
+        aliases:
+          - bot-modmail-mongo-1
     volumes:
       - mongodb:/data/db
 
@@ -40,9 +51,9 @@ services:
       - garage_meta:/var/lib/garage/meta
       - ./docker/garage.toml:/etc/garage.toml
     ports:
-      - "9100:9000"   # S3 API (authenticated) — bot uploads + bucket management
-      - "9200:3902"   # Web endpoint (anonymous read) — log viewer / browsers
-      - "3903:3903"   # Admin API
+      - "9101:9000"   # S3 API (authenticated) — bot uploads + bucket management
+      - "9201:3902"   # Web endpoint (anonymous read) — log viewer / browsers
+      - "3904:3903"   # Admin API
     command: [ "./garage", "-c", "/etc/garage.toml", "server" ]
     restart: unless-stopped
 
@@ -50,3 +61,10 @@ volumes:
   mongodb:
   garage_data:
   garage_meta:
+
+networks:
+  # Shared with external compose projects (e.g. the SoTFR api) so they can reach
+  # MongoDB as bot-modmail-mongo-1:27017. Create it once with:
+  #   docker network create modmail-shared
+  modmail-shared:
+    external: true
