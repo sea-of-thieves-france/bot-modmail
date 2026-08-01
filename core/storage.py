@@ -281,7 +281,11 @@ class S3StorageClient:
         if not self.enabled or self._client is None:
             return None
 
-        hash_ = avatar.key  # e.g. "a_abc123" or "abc123def456"
+        # Stand-in avatars (e.g. persistent-note authors) may not expose a hash.
+        hash_ = getattr(avatar, "key", None)  # e.g. "a_abc123" or "abc123def456"
+        if not hash_:
+            return None
+
         ext = "gif" if hash_.startswith("a_") else "webp"
         key = f"avatars/{user_id}/{hash_}.{ext}"
 

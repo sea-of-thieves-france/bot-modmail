@@ -43,6 +43,81 @@ from core.utils import (
 logger = getLogger(__name__)
 
 
+class _NoteAvatar:
+    """Minimal :class:`discord.Asset` stand-in for a persistent note author.
+
+    Notes only store the avatar (S3 key or legacy CDN URL) of their author, so when the
+    author is no longer cached we rebuild just enough of the asset API for the embed and
+    for ``storage.upload_avatar`` (which needs ``key``) to work.
+    """
+
+    def __init__(self, key: typing.Optional[str], url: str):
+        self.key = key
+        self.url = url
+
+    def __str__(self):
+        return self.url
+
+    def with_format(self, _format):
+        return self
+
+    def with_size(self, _size):
+        return self
+
+
+class _NoteAuthor:
+    """Stand-in author for a persistent note whose author is not cached anymore."""
+
+    def __init__(self, author: dict, storage=None):
+        self.id = int(author["id"])
+        self.name = author["name"]
+        self.discriminator = author.get("discriminator") or "0"
+
+        avatar_key = author.get("avatar_key")
+        avatar_url = author.get("avatar_url") or ""
+        if avatar_key:
+            # "avatars/{user_id}/{hash}.{ext}" — the hash is what Asset.key exposes.
+            hash_ = avatar_key.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+            if storage is not None and storage.enabled:
+                avatar_url = storage.url_for(avatar_key)
+        else:
+            hash_ = None
+        self.display_avatar = _NoteAvatar(hash_, avatar_url)
+        self.avatar = self.display_avatar
+
+    def __str__(self):
+        return self.name if self.discriminator in ("0", "0000", None) else f"{self.name}#{self.discriminator}"
+
+
+def _note_attachment_payloads(attachments: typing.Optional[list], storage=None) -> list:
+    """Rebuild ``discord.Attachment`` payloads from the attachments stored with a note.
+
+    Persistent notes are replayed in every new thread, long after the original message is
+    gone, so the URL comes from S3 when available and falls back to whatever was stored.
+    """
+    payloads = []
+    for att in attachments or []:
+        url = att.get("url") or ""
+        key = att.get("key")
+        if key and storage is not None and storage.enabled:
+            url = storage.url_for(key)
+        if not url:
+            continue
+        payloads.append(
+            {
+                "id": int(att.get("id") or 0),
+                "filename": att.get("filename") or "attachment",
+                "size": att.get("size") or 0,
+                "url": url,
+                "proxy_url": url,
+                "width": att.get("width"),
+                "height": att.get("height"),
+                "content_type": att.get("content_type"),
+            }
+        )
+    return payloads
+
+
 class Thread:
     """Represents a discord Modmail thread"""
 
@@ -951,11 +1026,12 @@ class Thread:
             for note in notes:
                 author = note["author"]
 
-                class Author:
-                    name = author["name"]
-                    id = author["id"]
-                    discriminator = author["discriminator"]
-                    display_avatar = SimpleNamespace(url=author["avatar_url"])
+                # Prefer the real (cached) user so the embed and the S3 avatar upload get a
+                # genuine discord.Asset; fall back to a stand-in built from the stored note.
+                author_id = int(author["id"])
+                author_obj = self.bot.get_user(author_id) or self.bot.guild.get_member(author_id)
+                if author_obj is None:
+                    author_obj = _NoteAuthor(author, storage)
 
                 data = {
                     "id": round(time.time() * 1000 - discord.utils.DISCORD_EPOCH) << 22,
@@ -967,7 +1043,7 @@ class Thread:
                     "mention_everyone": None,
                     "tts": None,
                     "content": note["message"],
-                    "author": Author(),
+                    "author": author_obj,
                 }
                 message = discord.Message(state=State(), channel=self.channel, data=data)
                 ids[note["_id"]] = str((await self.note(message, persistent=True, thread_creation=True)).id)
