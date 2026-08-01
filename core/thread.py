@@ -939,8 +939,12 @@ class Thread:
         async def send_persistent_notes():
             notes = await self.bot.api.find_notes(self.recipient)
             ids = {}
+            storage = getattr(self.bot, "storage", None)
 
             class State:
+                # discord.Attachment reads state.http; nothing ever downloads through it here.
+                http = None
+
                 def store_user(self, user, cache):
                     return user
 
@@ -955,7 +959,7 @@ class Thread:
 
                 data = {
                     "id": round(time.time() * 1000 - discord.utils.DISCORD_EPOCH) << 22,
-                    "attachments": {},
+                    "attachments": _note_attachment_payloads(note.get("attachments"), storage),
                     "embeds": {},
                     "edited_timestamp": None,
                     "type": None,

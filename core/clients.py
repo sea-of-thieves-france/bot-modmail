@@ -804,6 +804,27 @@ class MongoDBClient(ApiClient):
 
         note_avatar_key = note_avatar_result[0] if note_avatar_result else None
 
+        # Persist the attachments too: a persistent note is replayed in every future
+        # thread, so it needs a URL that outlives the original message. The S3 URL is
+        # permanent; without S3 we fall back to the (expiring) Discord CDN URL.
+        attachments = []
+        for a in message.attachments:
+            entry = {
+                "id": str(a.id),
+                "filename": a.filename,
+                "is_image": a.width is not None,
+                "size": a.size,
+                "width": a.width,
+                "height": a.height,
+                "content_type": a.content_type,
+                "url": a.url,
+            }
+            if storage and storage.enabled:
+                _att_result = await storage.upload_attachment(a)
+                if _att_result:
+                    entry["key"], entry["url"] = _att_result
+            attachments.append(entry)
+
         await self.db.notes.insert_one(
             {
                 "recipient": str(recipient.id),
@@ -815,6 +836,7 @@ class MongoDBClient(ApiClient):
                 },
                 "message": message.content,
                 "message_id": str(message_id),
+                "attachments": attachments,
             }
         )
 

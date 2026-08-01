@@ -38,6 +38,7 @@ Security notes:
 import logging
 import os
 import uuid as _uuid
+from collections import OrderedDict
 from typing import Optional, Tuple
 
 import discord
@@ -55,6 +56,9 @@ logger = logging.getLogger(__name__)
 
 class S3StorageClient:
     """S3-compatible storage client. Gracefully disabled when unconfigured."""
+
+    #: Maximum number of memoised attachment uploads kept in memory.
+    ATTACHMENT_CACHE_SIZE = 1000
 
     def __init__(self, bot):
         self.bot = bot
@@ -86,6 +90,10 @@ class S3StorageClient:
         self._session = None
         self._cm = None  # context manager returned by create_client()
         self._client = None  # the actual low-level botocore client
+
+        # attachment_id -> (key, public_url); a single Discord attachment is often
+        # uploaded by several code paths (thread.send, append_log, create_note).
+        self._attachment_keys: "OrderedDict[int, Tuple[str, str]]" = OrderedDict()
 
     # -------------------------------------------------------------------------
     # Lifecycle
@@ -187,6 +195,17 @@ class S3StorageClient:
     # Public API
     # -------------------------------------------------------------------------
 
+    def url_for(self, key: str) -> str:
+        """Public URL of an object key (see :meth:`_url_for`)."""
+        return self._url_for(key)
+
+    def key_from_url(self, url: str) -> Optional[str]:
+        """Return the object key if ``url`` already points at our own bucket, else ``None``."""
+        if not url or not self.public_url:
+            return None
+        prefix = f"{self.public_url}/"
+        return url[len(prefix) :] if url.startswith(prefix) else None
+
     async def upload_attachment(self, attachment: discord.Attachment) -> Optional[Tuple[str, str]]:
         """
         Download a Discord attachment and store it in S3 with an unguessable UUID key.
@@ -194,8 +213,9 @@ class S3StorageClient:
         Object key: ``attachments/{uuid4_hex}/{filename}``
 
         - UUID key provides 122 bits of entropy — enumeration is infeasible.
-        - Not idempotent by design: each call generates a new UUID key.
-          (Same attachment sent twice → two separate objects; acceptable trade-off.)
+        - A given Discord attachment is uploaded once: the resulting key is memoised for
+          the process lifetime, and an attachment already pointing at our bucket (e.g. a
+          replayed persistent note) is returned as-is instead of being copied again.
         - Fail-silent: returns ``None`` on any download or upload error.
 
         Returns ``(key, public_url)`` or ``None``.
@@ -204,6 +224,14 @@ class S3StorageClient:
         """
         if not self.enabled or self._client is None:
             return None
+
+        own_key = self.key_from_url(attachment.url)
+        if own_key:
+            return (own_key, attachment.url)
+
+        cached = self._attachment_keys.get(attachment.id)
+        if cached is not None:
+            return cached
 
         key = f"attachments/{_uuid.uuid4().hex}/{attachment.filename}"
 
@@ -227,6 +255,9 @@ class S3StorageClient:
         try:
             url = await self._put(key, data, content_type)
             logger.debug("Uploaded attachment → %s", url)
+            self._attachment_keys[attachment.id] = (key, url)
+            while len(self._attachment_keys) > self.ATTACHMENT_CACHE_SIZE:
+                self._attachment_keys.popitem(last=False)
             return (key, url)
         except Exception as exc:
             logger.warning("Error uploading attachment to S3 (key=%r): %s", key, exc)
