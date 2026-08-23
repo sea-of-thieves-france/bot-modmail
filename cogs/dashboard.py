@@ -5,8 +5,10 @@ Dashboard realtime client
 Dials the moderation dashboard's realtime hub so the bot can:
 
 * send lightweight "something changed" signals for threads (targeted refetch),
-* receive moderator replies (with a native socket.io **ack**) that are relayed to
-  the recipient's DM and mirrored into the thread via :meth:`Thread.reply`.
+* receive moderator messages (with a native socket.io **ack**): a *reply* is relayed to
+  the recipient's DM and mirrored into the thread via :meth:`Thread.reply`, while a *note*
+  (optionally persistent) stays staff-side via :meth:`Thread.note` — same split as the
+  ``?reply`` / ``?note`` / ``?note persistent`` commands.
 
 Topology (inverted vs. the old design)
 --------------------------------------
@@ -54,13 +56,22 @@ logger = getLogger(__name__)
 MAX_ATTACHMENTS = 10
 NAMESPACE = "/modmail"
 
+# Delivery mode -> name of the command whose ``PermissionLevel`` gates it. A dashboard
+# message is never allowed to do more than the equivalent chat command would.
+MODE_COMMANDS = {
+    "reply": "reply",
+    "note": "note",
+    "note_persistent": "note persistent",
+}
+
 
 class _DashboardAttachment:
     """Duck-typed stand-in for :class:`discord.Attachment`.
 
     Exposes only what the reply pipeline reads: ``url``/``filename`` (used by
     ``S3StorageClient.upload_attachment`` to download+re-upload) plus ``id``/``size``
-    (persisted by ``append_log``).
+    (persisted by ``append_log``) and ``width``/``height`` (read by ``append_log`` and
+    ``create_note`` to flag images — always ``None`` here, we never probe the file).
     """
 
     def __init__(self, url: str, filename: str, size: int = 0):
@@ -70,6 +81,8 @@ class _DashboardAttachment:
         self.id = discord.utils.time_snowflake(discord.utils.utcnow())
         self.content_type = None
         self.spoiler = False
+        self.width = None
+        self.height = None
 
     def is_spoiler(self) -> bool:
         return False
@@ -209,7 +222,13 @@ class Dashboard(commands.Cog):
         logger.warning("Dashboard hub disconnected (%s).", NAMESPACE)
 
     async def _on_reply(self, data):
-        """Handle an API->bot reply; the return value becomes the socket.io ack."""
+        """Handle an API->bot message; the return value becomes the socket.io ack.
+
+        ``mode`` selects the delivery (defaults to ``reply`` for older API builds):
+        ``reply`` DMs the recipient, ``note`` and ``note_persistent`` stay in the staff
+        thread. An unknown mode is rejected rather than downgraded — silently turning a
+        note into a reply would leak staff-only text to the user.
+        """
         await self.bot.wait_until_ready()
         if not isinstance(data, dict):
             return {"ok": False, "error": "bad_ids"}
@@ -218,6 +237,10 @@ class Dashboard(commands.Cog):
         raw_attachments = data.get("attachments") or []
         if not content and not raw_attachments:
             return {"ok": False, "error": "empty_message"}
+
+        mode = data.get("mode") or "reply"
+        if mode not in MODE_COMMANDS:
+            return {"ok": False, "error": "bad_mode"}
 
         # Resolve the thread from its channel.
         try:
@@ -233,7 +256,7 @@ class Dashboard(commands.Cog):
         if thread is None:
             return {"ok": False, "error": "thread_not_found"}
 
-        # Resolve the acting moderator and enforce PermissionLevel for `reply`.
+        # Resolve the acting moderator and enforce the PermissionLevel of the command this mode maps to.
         member = self.bot.guild.get_member(mod_id) if self.bot.guild else None
         if member is None:
             return {"ok": False, "error": "mod_not_in_guild"}
@@ -244,23 +267,56 @@ class Dashboard(commands.Cog):
             guild=self.bot.modmail_guild,
         )
         try:
-            allowed = await checks.check_permissions(fake_ctx, "reply")
+            allowed = await checks.check_permissions(fake_ctx, MODE_COMMANDS[mode])
         except Exception:
-            logger.warning("Permission check failed for dashboard reply.", exc_info=True)
+            logger.warning("Permission check failed for dashboard %s.", mode, exc_info=True)
             allowed = False
         if not allowed:
-            return {"ok": False, "error": "forbidden"}
+            return {"ok": False, "error": "forbidden" if mode == "reply" else "note_forbidden"}
 
         # Build relayed attachments (fail-soft: a bad file is skipped, text still sends).
         attachments = await self._build_attachments(raw_attachments)
         message = _DashboardMessage(
             author=member, content=content, channel=thread.channel, attachments=attachments
         )
+
+        if mode != "reply":
+            return await self._send_note(thread, message, persistent=mode == "note_persistent")
+
         try:
             await thread.reply(message, content)
         except Exception:
             logger.error("Dashboard reply failed to send.", exc_info=True)
             return {"ok": False, "error": "send_failed"}
+
+        return {"ok": True}
+
+    async def _send_note(self, thread, message, *, persistent: bool) -> dict:
+        """Post a dashboard-originated note, mirroring the ``?note`` / ``?note persistent`` commands.
+
+        A note is only posted (and pinned) in the staff thread — it never reaches the recipient.
+        A persistent one is additionally stored so it is replayed on the user's future threads.
+        Pinning and persisting are best effort: the note is already visible in the thread, and
+        failing the ack afterwards would show an error in the dashboard for a message that was sent.
+        """
+        try:
+            note = await thread.note(message, persistent=persistent)
+        except Exception:
+            logger.error("Dashboard note failed to send.", exc_info=True)
+            return {"ok": False, "error": "send_failed"}
+
+        try:
+            await note.pin()
+        except Exception:
+            logger.warning("Could not pin the dashboard note.", exc_info=True)
+
+        if persistent:
+            try:
+                await self.bot.api.create_note(
+                    recipient=thread.recipient, message=message, message_id=note.id
+                )
+            except Exception:
+                logger.error("Dashboard note was sent but could not be persisted.", exc_info=True)
 
         return {"ok": True}
 
@@ -330,6 +386,15 @@ class Dashboard(commands.Cog):
         await self._emit(
             "thread_message",
             self._signal(thread, from_mod=bool(from_mod), ts=str(discord.utils.utcnow())),
+        )
+
+    @commands.Cog.listener()
+    async def on_thread_note(self, thread, message, persistent):
+        # Notes are staff-only, but they are part of the conversation the dashboard renders, so they
+        # get the same signal as a reply — whether they come from `?note` or from the dashboard.
+        await self._emit(
+            "thread_message",
+            self._signal(thread, from_mod=True, ts=str(discord.utils.utcnow())),
         )
 
     @commands.Cog.listener()

@@ -1699,6 +1699,12 @@ class Thread:
             self.bot.api.append_log(message, message_id=msg.id, channel_id=self.channel.id, type_="note")
         )
 
+        # Notes have no equivalent of `on_thread_reply`, so nothing would tell the dashboard the
+        # conversation changed. Replayed persistent notes are skipped: `on_thread_create` already
+        # covers thread creation and would otherwise fire one signal per replayed note.
+        if not thread_creation:
+            self.bot.dispatch("thread_note", self, message, persistent)
+
         return msg
 
     async def reply(
