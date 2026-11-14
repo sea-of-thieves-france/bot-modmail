@@ -27,7 +27,7 @@ idna==3.11; python_version >= '3.8'
 isodate==0.6.1
 lottie[pdf]==0.7.2; python_version >= '3'
 motor==3.7.1; python_version >= '3.9'
-multidict==6.7.0; python_version >= '3.9'
+multidict==7.2.1; python_version >= '3.9'
 natural==0.2.0
 orjson==3.11.4; python_version >= '3.9'
 packaging==23.2; python_version >= '3.7'
