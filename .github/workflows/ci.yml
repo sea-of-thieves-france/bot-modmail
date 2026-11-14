@@ -68,8 +68,13 @@ jobs:
         with:
           context: .
           push: false
+          load: true
+          tags: ci/image
+          # Lecture seule : le cache est écrit par la release (sinon chaque PR l'agrandit)
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+      # L'image démarre et contient ce qu'il faut
+      - name: Démarrage de l'image
+        run: docker run --rm --entrypoint sh ci/image -c 'test "$(id -un)" = modmail && python --version && python -c "import discord, motor; print(discord.__version__)" && test -f bot.py'
 
   # Échec sur master (sur les PR, l'échec est visible dans la PR elle-même)
   notify-failure:

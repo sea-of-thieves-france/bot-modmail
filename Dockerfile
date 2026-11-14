@@ -1,4 +1,5 @@
-FROM python:3.11-slim-bookworm as base
+# Image Python épinglée, suivie par Renovate.
+FROM python:3.11-slim-bookworm@sha256:a83ba18aef0f865b1a4a611c2cf460fe446f2795673bbb9fe43be570439e3b39 AS base
 
 RUN apt-get update &&  \
     apt-get install --no-install-recommends -y \
@@ -10,7 +11,7 @@ RUN apt-get update &&  \
     # Create a non-root user.
     useradd --shell /usr/sbin/nologin --create-home -d /opt/modmail modmail
 
-FROM base as builder
+FROM base AS builder
 
 COPY requirements.txt .
 

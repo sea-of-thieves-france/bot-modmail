@@ -1,0 +1,25 @@
+# Nettoyage des images GHCR, chaque lundi : seules les versions les plus récentes sont gardées
+# (stockage des packages limité sur l'offre gratuite de l'organisation). Une release publie plusieurs
+# versions de package (index, image, SBOM et provenance) : 40 versions ≈ une dizaine de releases.
+name: Packages
+
+on:
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  prune:
+    name: Nettoyage
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/delete-package-versions@v5
+        with:
+          package-name: bot-modmail
+          package-type: container
+          min-versions-to-keep: 40
