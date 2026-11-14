@@ -15,6 +15,8 @@ permissions:
 jobs:
   title:
     name: Titre
+    # Description modifiée seule : rien à revérifier
+    if: github.event.action != 'edited' || github.event.changes.title != null
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
