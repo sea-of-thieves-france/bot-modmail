@@ -1,5 +1,5 @@
 # Image Python épinglée, suivie par Renovate.
-FROM python:3.11-slim-bookworm@sha256:a83ba18aef0f865b1a4a611c2cf460fe446f2795673bbb9fe43be570439e3b39 AS base
+FROM python:3.15-slim-bookworm@sha256:96599df822d0e1c6bb700014a05c7f3c8cabc6e0f7ff3c4f9f69cee033b4b5d9 AS base
 
 RUN apt-get update &&  \
     apt-get install --no-install-recommends -y \
