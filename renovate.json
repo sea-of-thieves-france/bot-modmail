@@ -1,0 +1,73 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    "docker:pinDigests"
+  ],
+  "timezone": "Europe/Paris",
+  "labels": [
+    "dependencies"
+  ],
+  "automergeStrategy": "squash",
+  "packageRules": [
+    {
+      "description": "Image de base du Dockerfile : correctifs (souvent de sécurité) appliqués sans attendre, avec une release",
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "matchUpdateTypes": [
+        "patch",
+        "digest",
+        "pin",
+        "pinDigest"
+      ],
+      "semanticCommitType": "fix",
+      "semanticCommitScope": "deps",
+      "automerge": true
+    },
+    {
+      "description": "Outils de développement : regroupés une fois par semaine, mergés si la CI passe",
+      "matchDepTypes": [
+        "dev-packages"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": "dev dependencies",
+      "schedule": [
+        "before 6am on monday"
+      ],
+      "automerge": true
+    },
+    {
+      "description": "Dépendances : regroupées une fois par semaine, relues avant le merge (elles déclenchent une release)",
+      "matchManagers": [
+        "pip_requirements",
+        "pipenv"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": "dependencies",
+      "schedule": [
+        "before 6am on monday"
+      ],
+      "semanticCommitType": "fix",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "description": "Actions GitHub : regroupées une fois par semaine",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "github actions",
+      "schedule": [
+        "before 6am on monday"
+      ],
+      "automerge": true
+    }
+  ]
+}
