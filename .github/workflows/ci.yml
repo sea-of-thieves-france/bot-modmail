@@ -1,0 +1,90 @@
+# Vérifications de chaque PR et de chaque push sur master. Sur les PR, build de l'image Docker
+# (sans publication) quand le Dockerfile ou les dépendances changent.
+# Minutes Actions comptées sur le quota de l'organisation : rien sur les PR en brouillon ni pour la
+# seule documentation, un seul job de vérification (facturé à la minute entamée).
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore: ["**/*.md", "docs/**"]
+  push:
+    branches: [master]
+    paths-ignore: ["**/*.md", "docs/**"]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Vérifications
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      docker: ${{ steps.docker.outputs.docker }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # Image à reconstruire si la PR touche le Dockerfile ou les dépendances
+      - id: docker
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          if gh pr diff "$PR" --repo "$REPO" --name-only | grep -qE '^(Dockerfile|\.dockerignore|requirements\.txt|\.github/workflows/ci\.yml)$'; then
+            echo docker=true >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install black==26.3.1 -r requirements.txt
+      - name: Format (Black)
+        run: black . --diff --check
+      - name: Compilation
+        run: python -m compileall -q bot.py cogs core
+
+  docker:
+    name: Docker
+    needs: check
+    if: needs.check.outputs.docker == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Échec sur master (sur les PR, l'échec est visible dans la PR elle-même)
+  notify-failure:
+    name: Notification d'échec
+    needs: [check, docker]
+    if: failure() && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Discord
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_UPDATES_WEBHOOK }}
+          TITLE: "Échec de la CI sur master"
+          DESCRIPTION: "Le commit `${{ github.sha }}` casse la CI : la prochaine release est bloquée."
+          URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ACCENT: danger
+        run: node .github/scripts/discord.mjs

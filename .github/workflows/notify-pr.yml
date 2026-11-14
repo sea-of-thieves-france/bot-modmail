@@ -1,0 +1,32 @@
+# Notification des PR à relire : celles de Renovate sans merge automatique (versions majeures,
+# dépendances des bots) et la PR de release de release-please. Les PR ouvertes à la main ne
+# notifient pas.
+name: PR à relire
+
+on:
+  pull_request:
+    types: [opened, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    name: Notification
+    if: >-
+      github.event.pull_request.user.type == 'Bot' && (
+        startsWith(github.head_ref, 'release-please--') ||
+        (startsWith(github.head_ref, 'renovate/') && !contains(github.event.pull_request.body, '**Automerge**: Enabled'))
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Discord
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_UPDATES_WEBHOOK }}
+          TITLE: "PR à relire : ${{ github.event.pull_request.title }}"
+          DESCRIPTION: "${{ startsWith(github.head_ref, 'release-please--') && 'Release prête : la merger publie les versions et leurs images, puis Renovate les déploie.' || 'Mise à jour sans merge automatique : à relire (changelog, CI) avant de la merger.' }}"
+          URL: ${{ github.event.pull_request.html_url }}
+          ACCENT: warning
+        run: node .github/scripts/discord.mjs

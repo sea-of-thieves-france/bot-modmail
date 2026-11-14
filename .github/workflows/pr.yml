@@ -1,0 +1,56 @@
+# Vérification de chaque PR avant le merge en squash : son titre devient l'unique commit, donc la
+# ligne du CHANGELOG de release-please. Titre Conventional Commits : `feat(scope): …`, `fix: …`.
+# Exceptions : la PR de release de release-please et les PR de Renovate.
+# Labels posés d'après le type : `feat` → feature, `fix` → bug.
+name: PR
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+# Un seul job : chaque job est facturé à la minute entamée.
+jobs:
+  title:
+    name: Titre
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Vérifier le titre
+        if: ${{ !startsWith(github.head_ref, 'release-please--') && !startsWith(github.head_ref, 'renovate/') }}
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(feat|fix|perf|refactor|docs|test|build|ci|chore|revert|style)(\([a-z0-9-]+\))?!?: .+'
+          [[ "$TITLE" =~ $pattern ]] || {
+            echo "::error title=PR::Titre « $TITLE » : attendu « type(scope): description », par exemple « feat(event): add stages »."
+            exit 1
+          }
+
+      - name: Poser les labels de type
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ github.event.pull_request.title }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          case "$TITLE" in
+            feat*) wanted=feature ;;
+            fix\(deps\)*) wanted= ;;
+            fix*) wanted=bug ;;
+            *) wanted= ;;
+          esac
+          current=$(gh api "repos/$REPO/issues/$PR/labels" --jq '.[].name')
+          for label in feature bug; do
+            if [ "$label" = "$wanted" ]; then
+              grep -qxF "$label" <<<"$current" || gh api "repos/$REPO/issues/$PR/labels" -f "labels[]=$label" >/dev/null
+            elif grep -qxF "$label" <<<"$current"; then
+              gh api -X DELETE "repos/$REPO/issues/$PR/labels/$label" >/dev/null
+            fi
+          done

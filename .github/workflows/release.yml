@@ -1,0 +1,154 @@
+# Livraison continue.
+#
+# 1. À chaque push sur master, release-please tient à jour une PR de release : version et CHANGELOG
+#    calculés depuis les commits conventionnels (feat → mineure, fix → correctif, ! → majeure).
+# 2. Au merge de cette PR, release-please crée le tag (X.Y.Z) et la GitHub Release, puis ce workflow
+#    publie l'image : ghcr.io/sea-of-thieves-france/bot-modmail:X.Y.Z, :X.Y, :X, :sha-<commit>
+# 3. Renovate propose la nouvelle version dans sea-of-thieves-france/infra, qui la déploie.
+#
+# Republier une version : Actions → Release → Run workflow, avec le tag (X.Y.Z).
+# Variable RENOVATE_APP_ID et secrets RENOVATE_APP_PRIVATE_KEY, DISCORD_UPDATES_WEBHOOK (organisation).
+name: Release
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag à republier (X.Y.Z)
+        required: true
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    name: Release PR et tag
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      tag: ${{ steps.release.outputs.release_created == 'true' && steps.release.outputs.tag_name || '' }}
+    steps:
+      # Token de l'app GitHub « SoTFR Renovate » : la CI se lance sur la PR de release (pas avec
+      # GITHUB_TOKEN).
+      - id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.RENOVATE_APP_ID }}
+          private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
+
+      - id: release
+        uses: googleapis/release-please-action@v5
+        with:
+          token: ${{ steps.token.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish:
+    name: Image
+    needs: release-please
+    if: >-
+      always() && !failure() && !cancelled() &&
+      (needs.release-please.outputs.tag != '' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    env:
+      TAG: ${{ needs.release-please.outputs.tag || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          context: git
+          images: ghcr.io/${{ github.repository }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}},value=${{ env.TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.TAG }}
+            type=semver,pattern={{major}},value=${{ env.TAG }}
+            type=sha,prefix=sha-
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Relance Renovate dans sea-of-thieves-france/infra : la nouvelle version est proposée (et
+  # déployée) tout de suite.
+  renovate:
+    name: Relancer Renovate
+    needs: [release-please, publish]
+    if: always() && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.RENOVATE_APP_ID }}
+          private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: infra
+      - name: Signal à sea-of-thieves-france/infra
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: gh api "repos/${{ github.repository_owner }}/infra/dispatches" -f event_type=renovate
+
+      - uses: actions/checkout@v6
+      - name: Discord
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.tag || inputs.tag }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_UPDATES_WEBHOOK }}
+        run: |
+          release=$(gh release view "$TAG" --json body,url)
+          TITLE="Nouvelle version : bot-modmail $TAG" \
+          DESCRIPTION="$(echo "$release" | jq -r .body)" \
+          URL="$(echo "$release" | jq -r .url)" \
+          ACCENT=success node .github/scripts/discord.mjs
+
+  notify-failure:
+    name: Notification d'échec
+    needs: [release-please, publish, renovate]
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Discord
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_UPDATES_WEBHOOK }}
+          TITLE: "Échec de la release (bot-modmail)"
+          DESCRIPTION: "Le workflow Release a échoué sur `${{ github.ref_name }}` (${{ github.event_name }}). Aucune version n'est déployée tant qu'il n'est pas corrigé."
+          URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ACCENT: danger
+        run: node .github/scripts/discord.mjs
