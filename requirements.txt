@@ -1,5 +1,5 @@
 -i https://pypi.org/simple
-aiobotocore==2.26.0; python_version >= '3.9'
+aiobotocore==3.10.0; python_version >= '3.9'
 aioitertools==0.13.0; python_version >= '3.9'
 aiodns==3.5.0; python_version >= '3.9'
 aiohappyeyeballs==2.6.1; python_version >= '3.9'
