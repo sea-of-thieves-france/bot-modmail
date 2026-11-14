@@ -30,7 +30,7 @@ motor==3.7.1; python_version >= '3.9'
 multidict==6.7.0; python_version >= '3.9'
 natural==0.2.0
 orjson==3.11.4; python_version >= '3.9'
-packaging==23.2; python_version >= '3.7'
+packaging==26.3; python_version >= '3.7'
 parsedatetime==2.6
 pillow==12.0.0; python_version >= '3.10'
 propcache==0.4.1; python_version >= '3.9'
