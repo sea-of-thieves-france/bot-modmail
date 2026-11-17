@@ -45,7 +45,7 @@ services:
       - mongodb:/data/db
 
   garage:
-    image: dxflrs/garage:v2.3.0@sha256:866bd13ed2038ba7e7190e840482bc27234c4afaf77be8cfa439ae088c1e4690
+    image: dxflrs/garage:v2.5.0@sha256:677e5b758e4425a325b811c425c026bf35a4bf42f7ddbaa773de3f4fd779a5a5
     volumes:
       - garage_data:/var/lib/garage/data
       - garage_meta:/var/lib/garage/meta
