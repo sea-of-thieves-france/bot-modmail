@@ -6,7 +6,7 @@ verify_ssl = true
 [dev-packages]
 bandit = ">=1.7.5"
 black = "26.3.1"
-pylint = "==3.0.2"
+pylint = "==4.1.4"
 tomli = "==2.2.1"  # Needed for black on Python < 3.11
 
 [packages]
