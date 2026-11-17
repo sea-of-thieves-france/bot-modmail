@@ -34,7 +34,7 @@ packaging==26.3; python_version >= '3.7'
 parsedatetime==2.6
 pillow==13.0.0; python_version >= '3.10'
 propcache==0.4.1; python_version >= '3.9'
-pycares==4.11.0; python_version >= '3.9'
+pycares==5.2.1; python_version >= '3.9'
 pycparser==2.23; python_version >= '3.8'
 pymongo==4.15.3; python_version >= '3.9'
 python-dateutil==2.8.2; python_version >= '2.7' and python_version not in '3.0, 3.1, 3.2'
