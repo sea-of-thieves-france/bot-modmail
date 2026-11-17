@@ -18,7 +18,7 @@ services:
       modmail-shared: {}
 
   logviewer:
-    image: ghcr.io/modmail-dev/logviewer:master
+    image: ghcr.io/modmail-dev/logviewer:master@sha256:53dae0219018ddc8fbe7a15172e84826710bbbf9377113c1296a58b31fd01bd7
     restart: always
     depends_on:
       - mongo
@@ -28,7 +28,7 @@ services:
       - 80:8000
 
   mongo:
-    image: mongo
+    image: mongo@sha256:b0c835c26e5997413e985000f1013c275377cd9607761c1784d486f6dd620b7f
     restart: always
     # Expose MongoDB on the host for local testing/inspection (e.g. mongosh,
     # Compass). Bound to 127.0.0.1 so it is not reachable from outside this host.
@@ -45,7 +45,7 @@ services:
       - mongodb:/data/db
 
   garage:
-    image: dxflrs/garage:v2.3.0
+    image: dxflrs/garage:v2.3.0@sha256:866bd13ed2038ba7e7190e840482bc27234c4afaf77be8cfa439ae088c1e4690
     volumes:
       - garage_data:/var/lib/garage/data
       - garage_meta:/var/lib/garage/meta
