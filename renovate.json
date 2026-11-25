@@ -68,6 +68,43 @@
         "before 6am on monday"
       ],
       "automerge": true
+    },
+    {
+      "description": "aiobotocore : les paquets qu'il épingle montent avec lui dans une seule PR",
+      "matchPackageNames": [
+        "aiobotocore",
+        "botocore",
+        "boto3",
+        "aiohttp",
+        "aioitertools",
+        "multidict",
+        "python-dateutil"
+      ],
+      "groupName": "aiobotocore",
+      "separateMajorMinor": false,
+      "semanticCommitType": "fix",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "description": "aiodns et pycares dans une seule PR, aiodns v4 exigeant pycares >=5",
+      "matchPackageNames": [
+        "aiodns",
+        "pycares"
+      ],
+      "groupName": "aiodns",
+      "separateMajorMinor": false,
+      "semanticCommitType": "fix",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "description": "Image Python : pas de 3.15, zstandard n'a pas de roue pour cette version et l'image de build n'a pas de compilateur",
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "matchPackageNames": [
+        "python"
+      ],
+      "allowedVersions": "/^3\\.1[1-4]/"
     }
   ]
 }
