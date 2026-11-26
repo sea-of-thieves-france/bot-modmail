@@ -50,6 +50,7 @@ from discord.ext import commands
 from core import checks
 from core.models import getLogger
 from core.utils import match_ticket_id
+from core.telemetry import DASHBOARD_EVENTS
 
 logger = getLogger(__name__)
 
@@ -200,6 +201,7 @@ class Dashboard(commands.Cog):
             except asyncio.CancelledError:
                 raise
             except Exception:
+                DASHBOARD_EVENTS.labels(event="connect_failed").inc()
                 logger.warning(
                     "Dashboard hub connect to %s failed; retrying in %ss.",
                     self.url,
@@ -211,6 +213,7 @@ class Dashboard(commands.Cog):
 
     # -------------------------------------------------------------- hub callbacks
     async def _on_connect(self):
+        DASHBOARD_EVENTS.labels(event="connected").inc()
         logger.info("Dashboard hub connected (%s at %s).", NAMESPACE, self.url)
         # Ask the API to refresh any moderator views that went stale while we were away.
         try:
@@ -219,6 +222,7 @@ class Dashboard(commands.Cog):
             logger.debug("resync emit failed.", exc_info=True)
 
     async def _on_disconnect(self):
+        DASHBOARD_EVENTS.labels(event="disconnected").inc()
         logger.warning("Dashboard hub disconnected (%s).", NAMESPACE)
 
     async def _on_reply(self, data):

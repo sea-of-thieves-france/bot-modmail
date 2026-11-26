@@ -43,6 +43,8 @@ from typing import Optional, Tuple
 
 import discord
 
+from core.telemetry import UPLOADS
+
 try:
     import aiobotocore.session
     from botocore.exceptions import ClientError as BotocoreClientError
@@ -248,6 +250,7 @@ class S3StorageClient:
                 data = await resp.read()
                 content_type = resp.content_type or "application/octet-stream"
         except Exception as exc:
+            UPLOADS.labels(result="download_failed").inc()
             logger.warning("Error downloading attachment %s: %s", attachment.url, exc)
             return None
 
@@ -258,8 +261,10 @@ class S3StorageClient:
             self._attachment_keys[attachment.id] = (key, url)
             while len(self._attachment_keys) > self.ATTACHMENT_CACHE_SIZE:
                 self._attachment_keys.popitem(last=False)
+            UPLOADS.labels(result="ok").inc()
             return (key, url)
         except Exception as exc:
+            UPLOADS.labels(result="failed").inc()
             logger.warning("Error uploading attachment to S3 (key=%r): %s", key, exc)
             return None
 

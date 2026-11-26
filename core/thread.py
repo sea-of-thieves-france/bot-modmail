@@ -39,6 +39,7 @@ from core.utils import (
     DummyParam,
     extract_forwarded_content,
 )
+from core.telemetry import MESSAGES_RELAYED, THREAD_DURATION, THREADS_CLOSED, THREADS_CREATED
 
 logger = getLogger(__name__)
 
@@ -1195,6 +1196,9 @@ class Thread:
             await self._close(closer, silent, delete_channel, message)
 
     async def _close(self, closer, silent=False, delete_channel=True, message=None, scheduled=False):
+        if self.channel:
+            THREAD_DURATION.observe((discord.utils.utcnow() - self.channel.created_at).total_seconds())
+        THREADS_CLOSED.labels(reason="scheduled" if scheduled else "manual").inc()
         # Proactively disable any DM thread-creation menu so users can't keep interacting
         # with the menu after the thread is closed.
         try:
@@ -1896,6 +1900,9 @@ class Thread:
             Explicit text to use instead of ``message.content``. Provided by refactored
             reply commands to avoid mutating the original message object.
         """
+        if not note:
+            MESSAGES_RELAYED.labels(direction="to_member" if from_mod else "to_team").inc()
+
         if not note and from_mod:
             self.bot.loop.create_task(self._restart_close_timer())  # Start or restart thread auto close
 
@@ -2636,6 +2643,8 @@ class ThreadManager:
         manual_trigger: bool = True,
     ) -> Thread:
         """Creates a Modmail thread"""
+
+        THREADS_CREATED.labels(origin="staff" if creator else "member").inc()
 
         # Minimum character check
         min_chars = self.bot.config.get("thread_min_characters")
