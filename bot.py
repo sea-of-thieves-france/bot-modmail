@@ -45,6 +45,7 @@ from core.models import (
     getLogger,
 )
 from core.storage import S3StorageClient
+from core.telemetry import TelemetryServer
 from core.thread import ThreadManager
 from core.time import human_timedelta
 from core.utils import (
@@ -82,6 +83,7 @@ class ModmailBot(commands.Bot):
         super().__init__(command_prefix=None, intents=intents)  # implemented in `get_prefix`
         self.session = None
         self.storage = None
+        self.telemetry = TelemetryServer(self)
         self._api = None
         self.formatter = SafeFormatter()
         self.loaded_cogs = [
@@ -231,6 +233,7 @@ class ModmailBot(commands.Bot):
                 self.session = ClientSession(loop=self.loop)
                 self.storage = S3StorageClient(self)
                 await self.storage.setup()
+                await self.telemetry.start()
 
                 if self.config["enable_presence_intent"]:
                     logger.info("Starting bot with presence intent.")
@@ -248,6 +251,7 @@ class ModmailBot(commands.Bot):
                 except Exception:
                     logger.critical("Fatal exception", exc_info=True)
                 finally:
+                    await self.telemetry.close()
                     if self.storage:
                         await self.storage.close()
                     if self.session:

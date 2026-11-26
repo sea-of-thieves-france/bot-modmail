@@ -34,6 +34,11 @@ COPY --chown=modmail:modmail . .
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH=/opt/modmail/.venv/bin:$PATH \
-    USING_DOCKER=yes
+    USING_DOCKER=yes \
+    HEALTH_PORT=8080
+
+# /ready : le conteneur n'est sain qu'une fois Discord, Mongo et S3 joignables.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD ["python", "-c", "import os,urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('HEALTH_PORT', '8080') + '/ready', timeout=4).status == 200 else 1)"]
 
 CMD ["python", "bot.py"]
