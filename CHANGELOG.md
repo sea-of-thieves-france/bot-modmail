@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.6.0](https://github.com/sea-of-thieves-france/bot-modmail/compare/4.5.0...4.6.0) (2026-11-26)
+
+
+### Features
+
+* **observability:** add health server and Prometheus metrics ([#27](https://github.com/sea-of-thieves-france/bot-modmail/issues/27)) ([955a7b8](https://github.com/sea-of-thieves-france/bot-modmail/commit/955a7b83810384219c6dff3eb5ebc3479aa38ed7))
+
+
+### Bug Fixes
+
+* **deps:** update python:3.11-slim-bookworm docker digest to ef56ae9 ([#22](https://github.com/sea-of-thieves-france/bot-modmail/issues/22)) ([ff54c93](https://github.com/sea-of-thieves-france/bot-modmail/commit/ff54c932d1aedccf358c604b2927d8ac62adf797))
+
 ## [4.5.0](https://github.com/sea-of-thieves-france/bot-modmail/compare/4.4.2...4.5.0) (2026-11-14)
 
 
