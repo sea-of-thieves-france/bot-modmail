@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.6.1](https://github.com/sea-of-thieves-france/bot-modmail/compare/4.6.0...4.6.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* **deps:** update aiodns ([#26](https://github.com/sea-of-thieves-france/bot-modmail/issues/26)) ([1580498](https://github.com/sea-of-thieves-france/bot-modmail/commit/1580498ee1b675c5ef414d5807672f38caffeda0))
+* **deps:** upgrade aiobotocore to 3.10.0 with compatible pins ([#29](https://github.com/sea-of-thieves-france/bot-modmail/issues/29)) ([3727306](https://github.com/sea-of-thieves-france/bot-modmail/commit/372730628790af214f54c083f54c9516e09b2837))
+
 ## [4.6.0](https://github.com/sea-of-thieves-france/bot-modmail/compare/4.5.0...4.6.0) (2026-11-26)
 
 
