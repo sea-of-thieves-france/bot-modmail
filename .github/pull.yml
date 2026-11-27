@@ -1,8 +1,0 @@
-version: "1"
-rules:
-  - base: master
-    upstream: modmail-dev:master
-    mergeMethod: hardreset
-  - base: development
-    upstream: modmail-dev:development
-    mergeMethod: hardreset
