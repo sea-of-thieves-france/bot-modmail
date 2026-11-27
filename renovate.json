@@ -78,12 +78,27 @@
         "aiohttp",
         "aioitertools",
         "multidict",
-        "python-dateutil"
+        "python-dateutil",
+        "yarl"
       ],
       "groupName": "aiobotocore",
       "separateMajorMinor": false,
       "semanticCommitType": "fix",
       "semanticCommitScope": "deps"
+    },
+    {
+      "description": "botocore : borné par aiobotocore (3.10.0 : <1.43.118), borne à relever avec lui",
+      "matchPackageNames": [
+        "botocore"
+      ],
+      "allowedVersions": "<1.43.118"
+    },
+    {
+      "description": "python-dateutil : aiobotocore exige une version <3",
+      "matchPackageNames": [
+        "python-dateutil"
+      ],
+      "allowedVersions": "<3"
     },
     {
       "description": "aiodns et pycares dans une seule PR, aiodns v4 exigeant pycares >=5",
